@@ -52,6 +52,16 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 - UI and MCP analysis must call the same project service. Agents provide structured points and rectangles and never simulate clicks in the editor.
 - Analysis is read-only and must never advance the project revision or mutate the original, project document, or edit history.
 
+## Recording rules
+
+- M1e recording is video-only H.264 in an MP4 container. Do not silently add system audio, microphone, camera, GIF, click/keystroke overlays, or zoom behavior to the base contract.
+- `Mupaw.app` owns one recording service and one active recording session. Screenshot capture/selection and recording start/finalization are mutually exclusive.
+- Human region recording uses the native AppKit selector. Agent region recording accepts a structured `global_display_points` rectangle and must never operate the UI.
+- A successful start returns a stable session UUID; callers poll status and stop/cancel explicitly. Do not claim a completed artifact before AVAssetWriter finalization, AVFoundation track validation, file permissions, byte count, SHA-256, and preview all succeed.
+- Cancelled, failed, interrupted, or source-lost sessions must remove incomplete files and return terminal state without an artifact.
+- Recording dimensions, frame rates, bit rates, duration, history, filenames, and allocation sizes must be bounded. Recordings and files are owner-only.
+- Static sources still require wall-clock-correct MP4 duration; hold the last frame when ScreenCaptureKit does not deliver repeated unchanged frames.
+
 ## Localization rules
 
 - English and Simplified Chinese are required from the first version.

@@ -5,6 +5,7 @@ public struct MupawPaths: Sendable, Equatable {
     public let capturesDirectory: URL
     public let projectsDirectory: URL
     public let exportsDirectory: URL
+    public let recordingsDirectory: URL
     public let connectionDescriptorURL: URL
 
     public init(rootDirectory: URL) {
@@ -12,6 +13,7 @@ public struct MupawPaths: Sendable, Equatable {
         self.capturesDirectory = rootDirectory.appendingPathComponent("Captures", isDirectory: true)
         self.projectsDirectory = rootDirectory.appendingPathComponent("Projects", isDirectory: true)
         self.exportsDirectory = rootDirectory.appendingPathComponent("Exports", isDirectory: true)
+        self.recordingsDirectory = rootDirectory.appendingPathComponent("Recordings", isDirectory: true)
         self.connectionDescriptorURL = rootDirectory.appendingPathComponent("agent-connection.json")
     }
 
@@ -31,6 +33,7 @@ public struct MupawPaths: Sendable, Equatable {
             capturesDirectory,
             projectsDirectory,
             exportsDirectory,
+            recordingsDirectory,
         ]
         for directory in directories {
             try fileManager.createDirectory(

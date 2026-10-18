@@ -12,6 +12,14 @@ public enum MupawConstants {
     public static let previewMaximumDimension = 1_280
     public static let maximumScreenshotPixelCount = 120_000_000
     public static let minimumRegionPointDimension = 2.0
+    public static let supportedRecordingFrameRates = [15, 30, 60]
+    public static let maximumRecordingDimension = 3_840
+    public static let maximumRecordingPixelCount = 3_840 * 2_160
+    public static let minimumRecordingBitRate = 2_000_000
+    public static let maximumRecordingBitRate = 50_000_000
+    public static let maximumRecordingDurationSeconds = 4 * 60 * 60
+    public static let maximumRecordingHistoryCount = 20
+    public static let minimumCompletedRecordingDurationSeconds = 0.20
     public static let screenshotProjectSchemaVersion = 1
     public static let maximumProjectObjects = 500
     public static let maximumProjectCommandsPerBatch = 1_000

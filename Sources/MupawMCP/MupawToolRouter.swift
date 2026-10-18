@@ -34,6 +34,18 @@ internal struct MupawToolRouter: Sendable {
             case "mupaw_screenshot_capture":
                 return try await screenshot(arguments: arguments)
 
+            case "mupaw_recording_start":
+                return try await recordingStart(arguments: arguments)
+
+            case "mupaw_recording_status":
+                return try await recordingStatus(arguments: arguments)
+
+            case "mupaw_recording_stop":
+                return try await recordingStop(arguments: arguments)
+
+            case "mupaw_recording_cancel":
+                return try await recordingCancel(arguments: arguments)
+
             case "mupaw_project_create":
                 return try await projectCreate(arguments: arguments)
 
@@ -166,6 +178,120 @@ internal struct MupawToolRouter: Sendable {
             )
         }
         return .init(content: content, isError: false)
+    }
+
+    private func recordingStart(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let arguments = arguments ?? [:]
+        let formatValue = arguments["format"]?.stringValue ?? RecordingFormat.mp4.rawValue
+        guard let format = RecordingFormat(rawValue: formatValue), format == .mp4 else {
+            return failure("M1e supports only H.264 MP4 video recording.")
+        }
+
+        guard let modeValue = arguments["mode"]?.stringValue,
+            let mode = ScreenshotCaptureMode(rawValue: modeValue)
+        else {
+            return failure("mode is required and must be full_screen, window, or region.")
+        }
+        let sourceID = arguments["source_id"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = try parseRegion(arguments["region"])
+        switch mode {
+        case .fullScreen, .window:
+            guard let sourceID, !sourceID.isEmpty else {
+                return failure(
+                    "source_id is required for full_screen and window recording. Call mupaw_sources_list and use an exact returned identifier."
+                )
+            }
+            if region != nil {
+                return failure("region must be omitted for full_screen and window recording.")
+            }
+        case .region:
+            guard region != nil else {
+                return failure("region is required when recording mode is region.")
+            }
+            if let sourceID, !sourceID.isEmpty {
+                return failure("source_id must be omitted when recording mode is region.")
+            }
+        }
+
+        let frameRate = arguments["frame_rate"]?.intValue ?? 30
+        guard MupawConstants.supportedRecordingFrameRates.contains(frameRate) else {
+            return failure("frame_rate must be 15, 30, or 60.")
+        }
+        let qualityValue = arguments["quality"]?.stringValue ?? RecordingVideoQuality.standard.rawValue
+        guard let quality = RecordingVideoQuality(rawValue: qualityValue) else {
+            return failure("quality must be standard or high.")
+        }
+
+        let request = RecordingRequest(
+            mode: mode,
+            sourceID: sourceID,
+            region: region,
+            format: format,
+            frameRate: frameRate,
+            quality: quality,
+            includeCursor: arguments["include_cursor"]?.boolValue ?? false,
+            excludeMupawUI: arguments["exclude_mupaw_ui"]?.boolValue ?? true,
+            fileName: arguments["file_name"]?.stringValue
+        )
+        let status: RecordingSessionStatus = try await call(
+            method: .recordingStart,
+            payload: request,
+            responseType: RecordingSessionStatus.self
+        )
+        return recordingResult(status)
+    }
+
+    private func recordingStatus(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request = try recordingSessionRequest(arguments)
+        let status: RecordingSessionStatus = try await call(
+            method: .recordingStatus,
+            payload: request,
+            responseType: RecordingSessionStatus.self
+        )
+        return recordingResult(status)
+    }
+
+    private func recordingStop(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request = try recordingSessionRequest(arguments)
+        let status: RecordingSessionStatus = try await call(
+            method: .recordingStop,
+            payload: request,
+            responseType: RecordingSessionStatus.self
+        )
+        return recordingResult(status)
+    }
+
+    private func recordingCancel(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request = try recordingSessionRequest(arguments)
+        let status: RecordingSessionStatus = try await call(
+            method: .recordingCancel,
+            payload: request,
+            responseType: RecordingSessionStatus.self
+        )
+        return recordingResult(status)
+    }
+
+    private func recordingSessionRequest(
+        _ arguments: [String: Value]?
+    ) throws -> RecordingSessionRequest {
+        guard
+            let sessionID = arguments?["session_id"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !sessionID.isEmpty
+        else {
+            throw ToolArgumentError(
+                message: "Mupaw request failed [invalid_request]: session_id is required."
+            )
+        }
+        return RecordingSessionRequest(sessionID: sessionID)
+    }
+
+    private func recordingResult(_ status: RecordingSessionStatus) -> CallTool.Result {
+        if let preview = status.artifact?.preview {
+            return successWithPreview(status, preview: preview)
+        }
+        return success(status)
     }
 
     private func projectCreate(arguments: [String: Value]?) async throws -> CallTool.Result {

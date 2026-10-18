@@ -24,6 +24,7 @@ final class ScreenshotProjectServiceTests: XCTestCase {
         XCTAssertEqual(try Self.permissions(at: fixture.paths.capturesDirectory), 0o700)
         XCTAssertEqual(try Self.permissions(at: fixture.paths.projectsDirectory), 0o700)
         XCTAssertEqual(try Self.permissions(at: fixture.paths.exportsDirectory), 0o700)
+        XCTAssertEqual(try Self.permissions(at: fixture.paths.recordingsDirectory), 0o700)
         XCTAssertEqual(try Self.permissions(at: projectDirectory), 0o700)
         XCTAssertEqual(try Self.permissions(at: created.originalFileURL), 0o600)
         XCTAssertEqual(

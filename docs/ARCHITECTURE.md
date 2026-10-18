@@ -2,7 +2,7 @@
 
 ## Product invariant
 
-A human and an Agent operate the same capture engine. A screenshot made through MCP must appear in the same artifact store and carry the same metadata as one made from the UI.
+A human and an Agent operate the same application-owned capture and recording services. A screenshot or finalized MP4 made through MCP must use the same artifact stores and metadata contracts as one made from the UI.
 
 ## Process model
 
@@ -18,11 +18,12 @@ Mupaw.app
     ├── capture source registry
     ├── native region-selection overlay and global shortcuts
     ├── ScreenCaptureKit full-screen/window/region capture service
+    ├── ScreenCaptureKit stream + AVAssetWriter MP4 recording service
     ├── multi-display region planner and compositor
     ├── versioned screenshot project service
     ├── shared edit, visual-style renderer, and history service
     ├── Vision OCR and bounded sRGB color analyzer
-    └── capture, project, and export stores
+    └── capture, recording, project, and export stores
 ```
 
 The helper never performs screen capture itself. This avoids a second TCC identity and keeps permissions attached to `Mupaw.app`.
@@ -35,7 +36,7 @@ Pure shared types and local transport support:
 
 - capability and permission models;
 - explicit screenshot modes and global point/pixel geometry;
-- source, artifact, project, edit-command, visual-style, OCR, color-sampling, preview, and export descriptors;
+- source, screenshot artifact, recording session/artifact, project, edit-command, visual-style, OCR, color-sampling, preview, and export descriptors;
 - original-image pixel geometry for crop and annotation objects;
 - deterministic multi-display region planning;
 - RPC request/response envelopes;
@@ -51,6 +52,8 @@ Application-owned platform services:
 - ScreenCaptureKit source enumeration with display/window frames and scale metadata;
 - explicit full-screen and independent-window capture;
 - structured region capture split across displays and composed into one bounded image;
+- video-only H.264 MP4 display/window/single-display-region streaming through ScreenCaptureKit and AVAssetWriter;
+- stable recording session state, static-frame duration preservation, bounded resolution/bitrate/duration, owner-only files, and AVFoundation final artifact validation;
 - image encoding and preview generation;
 - screen, microphone, camera, accessibility, and input-monitoring permission snapshots.
 
@@ -70,20 +73,20 @@ Application-owned non-destructive editing services:
 
 ### Mupaw.app
 
-- SwiftUI application shell with explicit screenshot modes;
+- SwiftUI application shell with screenshot and recording workspaces and explicit source modes;
 - AppKit multi-display region-selection overlay with `Esc`/right-click cancellation;
 - Carbon global shortcuts with visible conflict state;
-- screenshot editor canvas, layer list, object inspector, crop and beautification sheets, OCR overlays, and color-sampling controls;
+- screenshot editor canvas, layer list, object inspector, crop and beautification sheets, OCR overlays, color-sampling controls, and recording source/settings/status/artifact views;
 - lifecycle for the local RPC listener;
-- routing UI and RPC requests to the same capture, editing, and analysis services;
-- capture, project, OCR, color, preview, and export presentation.
+- routing UI and RPC requests to the same screenshot, recording, editing, and analysis services;
+- screenshot, recording, project, OCR, color, preview, and export presentation.
 
 ### mupaw-mcp
 
 - official Swift MCP SDK over stdio;
-- a small, stable capture, editing, visual-style, OCR, and color-analysis tool catalog;
+- a small, stable screenshot, recording-session, editing, visual-style, OCR, and color-analysis tool catalog;
 - conversion between MCP values and Mupaw RPC values;
-- structured project creation, batch edits and style presets, history, OCR, color sampling, preview, and export;
+- structured MP4 start/status/stop/cancel plus project creation, batch edits and style presets, history, OCR, color sampling, preview, and export;
 - actionable errors for unavailable apps, permissions, stale revisions, invalid edits/analysis, and missing artifacts.
 
 ## M1a screenshot contract
@@ -136,6 +139,18 @@ The style model contains a solid or two-color linear-gradient background, bounde
 
 `set_visual_style`, `apply_style_preset`, and `clear_visual_style` are normal `project_apply_edits` commands. They require the current revision, participate in atomic batches and persisted undo/redo, and `reset` clears style together with crop and edit objects. Invalid style geometry, colors, shadow values, or output allocations reject the whole batch.
 
+## M1e basic MP4 recording contract
+
+M1e records video-only H.264 MP4 through one `RecordingService` owned by `Mupaw.app`. The MCP helper only forwards authenticated structured requests. A human selects a region through the native AppKit overlay; an Agent provides `global_display_points` directly. Display, independent-window, and single-display region sources share the same service. Cross-display region composition remains screenshot-only in M1e.
+
+`recording_start` validates a returned display/window source or a finite region, one of 15/30/60 fps, Standard/High bounded bitrate, and a sanitized destination under the owner-only `Recordings` directory. Recording resolution preserves aspect ratio, uses even dimensions, caps each side at 3,840 pixels, and caps total pixels at 3,840 × 2,160. ScreenCaptureKit provides BGRA sample buffers; AVAssetWriter encodes one real-time H.264 video track in an MP4 container. Audio capture is disabled.
+
+Start returns a stable session UUID after the stream has started. `recording_status` reports starting/recording/stopping or retained terminal state with elapsed wall time, dimensions, frame count, source, and settings. Only one session may own recording; screenshot capture/selection and recording start/finalization are mutually exclusive. `recording_cancel` stops the stream and deletes the incomplete file. Stream/writer/source failures also delete partial data and retain a failed terminal status without an artifact.
+
+Unchanged screen content may not produce repeated ScreenCaptureKit frames. The writer retains the most recent valid sample and appends one retimed terminal frame at stop, preserving wall-clock duration without inventing intermediate frame-rate claims. Stop does not report completion until AVAssetWriter finishes, AVFoundation confirms exactly one playable H.264 video track and zero audio tracks, dimensions and duration are valid, permissions are `0600`, byte count and SHA-256 are computed, and a bounded still preview is generated.
+
+The UI and MCP both call `RecordingService`. Completed metadata includes actual duration, frame count, requested and average frame rate, dimensions, bytes, SHA-256, file URL, creation/completion times, source descriptor, codec/container, and preview. M1e intentionally excludes system audio, microphone, camera, GIF, event overlays, and zoom editing.
+
 ## Local RPC security
 
 - bind only to loopback;
@@ -162,7 +177,7 @@ The deterministic codec tests cover malformed structures and oversized-response 
 - M1b: non-destructive crop, arrow, text, mosaic, history, shared preview/export, and Agent editing tools — complete.
 - M1c: Apple Vision OCR, point color picking, bounded region color summaries, UI overlays, and Agent analysis tools — complete.
 - M1d: non-destructive backgrounds, aspect canvases, padding, rounded cards, shadows, editable presets, and Agent style commands — complete.
-- M1e: base MP4 recording remains planned.
+- M1e: application-owned video-only H.264 MP4 display/window/single-display-region recording with stable sessions, final artifact validation, UI, and Agent tools — complete.
 - M2: scrolling capture, partial-result stitching, and GIF.
 - M3: system audio, microphone, camera overlay, click and keystroke events, manual zoom timeline.
 - M4: automatic focus/zoom suggestions and editable super-recording workflow.

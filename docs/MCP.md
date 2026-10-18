@@ -1,6 +1,6 @@
-# Mupaw MCP contract — M0 through M1d
+# Mupaw MCP contract — M0 through M1e
 
-The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards capture, editing, visual styling, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures independently, reads arbitrary source files, or drives Mupaw's UI.
+The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards screenshot capture, MP4 recording sessions, editing, visual styling, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures or records independently, reads arbitrary source files, or drives Mupaw's UI.
 
 ## Discovery and capture tools
 
@@ -10,7 +10,7 @@ Returns whether the app responds, app and protocol versions, process ID, and rel
 
 ### `mupaw_capabilities_get`
 
-Returns the implemented and planned capability matrix. M1d reports `source-enumeration`, `screenshot`, `region-capture`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available.
+Returns the implemented and planned capability matrix. M1e reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available.
 
 ### `mupaw_sources_list`
 
@@ -38,6 +38,92 @@ Mupaw supports explicit `full_screen`, `window`, and `region` PNG capture. Regio
 ```
 
 For full-screen and window capture, omit `region` and provide an exact `display:` or `window:` source ID. A successful result contains the completed local PNG file URL, SHA-256, actual dimensions, bytes, source metadata, and a bounded preview.
+
+## Recording tools
+
+M1e is video-only H.264 MP4. It does not record system audio, microphone, camera, clicks, keystrokes, GIF, or zoom events.
+
+### `mupaw_recording_start`
+
+Starts one application-owned recording and returns after ScreenCaptureKit has started. Only one recording session may be active.
+
+Window example:
+
+```json
+{
+  "mode": "window",
+  "source_id": "window:1234",
+  "format": "mp4",
+  "frame_rate": 30,
+  "quality": "standard",
+  "include_cursor": false,
+  "file_name": "Product demo"
+}
+```
+
+Structured region example:
+
+```json
+{
+  "mode": "region",
+  "region": {
+    "coordinate_space": "global_display_points",
+    "x": 120,
+    "y": 80,
+    "width": 960,
+    "height": 540
+  },
+  "format": "mp4",
+  "frame_rate": 15,
+  "quality": "high",
+  "include_cursor": true,
+  "exclude_mupaw_ui": true
+}
+```
+
+`mode` is required. `full_screen` and `window` require an exact source ID from `mupaw_sources_list` and omit `region`. `region` omits `source_id` and must fit inside one active display in M1e. `frame_rate` is `15`, `30`, or `60`; `quality` is `standard` or `high`. The result contains a stable session UUID, active phase, source, requested settings, dimensions, start time, elapsed duration, and frame count.
+
+### `mupaw_recording_status`
+
+```json
+{
+  "session_id": "recording-session-uuid"
+}
+```
+
+Returns current or retained terminal state. Active phases are `starting`, `recording`, and `stopping`; terminal phases are `completed`, `failed`, and `cancelled`. Terminal sessions are retained in a bounded in-memory history for polling.
+
+### `mupaw_recording_stop`
+
+```json
+{
+  "session_id": "recording-session-uuid"
+}
+```
+
+Stops the stream and waits for finalization. A successful completed result includes an `artifact` with:
+
+- owner-only local MP4 file URL;
+- `format: "mp4"` and `codec: "h264"`;
+- actual dimensions and duration;
+- requested and average frame rate plus frame count;
+- byte count and SHA-256;
+- source, creation/completion times, and bounded JPEG preview.
+
+Completion is claimed only after AVFoundation confirms one playable H.264 video track and zero audio tracks. Repeating stop for an already completed retained session is idempotent and returns the same terminal status.
+
+### `mupaw_recording_cancel`
+
+```json
+{
+  "session_id": "recording-session-uuid"
+}
+```
+
+Stops capture, cancels AVAssetWriter, deletes the incomplete MP4, and returns `cancelled` without an artifact. Stream, writer, source, or finalization failures follow the same no-partial-artifact rule.
+
+Recording files live under Mupaw's owner-only `Recordings` directory. Output dimensions are even, preserve aspect ratio, have a maximum side of 3,840 pixels, and a maximum of 3,840 × 2,160 pixels. Static content is held through the wall-clock stop time so unchanged screens still produce correctly timed clips.
+
 
 ## Screenshot project tools
 
@@ -267,6 +353,10 @@ Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project rev
 - `app_not_running`: start Mupaw and retry;
 - `permission_required`: grant Screen & System Audio Recording permission;
 - `capture_in_progress`: wait for the active capture/selection to finish;
+- `recording_in_progress`: poll or stop the returned active recording session before starting another;
+- `recording_not_found`: use a retained or active session UUID;
+- `recording_not_active`: the requested session is not the active session;
+- `recording_failed`: no completed MP4 is claimed; inspect the accompanying stream/writer/finalization message;
 - `source_not_found`: refresh sources and use a returned source ID;
 - `invalid_region`: correct region coordinates or active-display intersection;
 - `artifact_not_found`: the project source file no longer exists;
@@ -280,7 +370,7 @@ Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project rev
 - `color_sampling_failed`: color input preparation or sRGB sampling failed;
 - `invalid_request`, `unknown_method`, `protocol_mismatch`, `unauthorized`, `frame_too_large`, `capture_failed`, and `internal_error` retain their M0/M1a meanings.
 
-MCP failures use `isError: true` text content and preserve the stable internal error code in the message. Invalid OCR/color inputs return `invalid_request`; stale expected revisions return `project_version_conflict`. A result is successful only after the requested capture, project mutation, analysis, preview, or export has completed.
+MCP failures use `isError: true` text content and preserve the stable internal error code in the message. Invalid recording settings, OCR/color inputs, or source/mode combinations return `invalid_request`; stale expected revisions return `project_version_conflict`. Recording start success means the stream started, while completed recording success is returned only by status/stop after finalization. Other results are successful only after the requested capture, project mutation, analysis, preview, or export has completed.
 
 ## Validation commands
 
@@ -291,8 +381,9 @@ make mcp-smoke-capture
 make m1b-smoke
 make m1c-smoke
 make m1d-smoke
+make m1e-smoke
 make rpc-negative-smoke
-make m1d-acceptance
+make m1e-acceptance
 ```
 
 `make m1b-smoke` performs a real capture, project creation, atomic crop/arrow/text/mosaic batches, update/delete/add, stale-revision and invalid-edit checks, undo, redo, reset, restore, preview, export, file/hash/dimension validation, and original-image immutability verification.
@@ -300,5 +391,9 @@ make m1d-acceptance
 `make m1c-smoke` performs a real Mupaw-window capture, project creation, local OCR with engine/language reporting, point and region color sampling, result-bound/coordinate/color validation, invalid-input and stale-revision checks, and proof that analysis does not change the project revision, project document, or copied original.
 
 `make m1d-smoke` performs a real capture and project creation, applies an editable preset and a fully custom gradient/square style, validates deterministic preview/export dimensions and hashes, rejects an invalid atomic style batch, exercises undo/redo/clear/none-preset behavior, and proves the copied original remains unchanged.
+
+`make m1e-smoke` performs real window and structured single-display region MP4 recordings, polls active state, verifies screenshot and duplicate-recording ownership errors, tests cancel/delete and missing-session behavior, and independently validates MP4 container, H.264 track, no audio track, playability, duration, dimensions, permissions, bytes, SHA-256, and preview metadata.
+
+`make m1e-full-screen-smoke` additionally records the primary display. Cover it with non-sensitive test content first; this mode is intentionally separate from the default acceptance gate.
 
 `make mcp-smoke-full-screen` remains separate because it records the current display. Cover the display with non-sensitive test content first. For UI/MCP capture ownership, start interactive region selection and run `make mcp-capture-conflict-smoke`.

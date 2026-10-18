@@ -99,6 +99,30 @@ internal enum MupawToolCatalog {
             ])
         ),
         Tool(
+            name: "mupaw_recording_start",
+            description:
+                "Start one application-owned, video-only H.264 MP4 recording and return a stable session ID immediately after ScreenCaptureKit starts. Supports full_screen, window, or a structured single-display region. No audio, camera, click, keystroke, GIF, or zoom features are included in M1e.",
+            inputSchema: recordingStartSchema
+        ),
+        Tool(
+            name: "mupaw_recording_status",
+            description:
+                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, and the completed artifact when available.",
+            inputSchema: recordingSessionSchema
+        ),
+        Tool(
+            name: "mupaw_recording_stop",
+            description:
+                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, video preview, and track validation are complete.",
+            inputSchema: recordingSessionSchema
+        ),
+        Tool(
+            name: "mupaw_recording_cancel",
+            description:
+                "Cancel an active recording session and delete its incomplete MP4. No completed artifact is claimed.",
+            inputSchema: recordingSessionSchema
+        ),
+        Tool(
             name: "mupaw_project_create",
             description:
                 "Create a non-destructive screenshot editing project from a Mupaw capture artifact. The source file must be inside Mupaw's Captures directory and its SHA-256 must match.",
@@ -264,6 +288,99 @@ internal enum MupawToolCatalog {
             ])
         ),
     ]
+
+    private static let recordingStartSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "mode": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("full_screen"),
+                    .string("window"),
+                    .string("region"),
+                ]),
+            ]),
+            "source_id": .object([
+                "type": .string("string"),
+                "description": .string(
+                    "Exact display: or window: identifier from mupaw_sources_list. Required for full_screen and window; omit for region."
+                ),
+            ]),
+            "region": .object([
+                "type": .string("object"),
+                "description": .string(
+                    "Single-display region in global_display_points. Cross-display video regions are rejected in M1e."
+                ),
+                "properties": .object([
+                    "coordinate_space": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("global_display_points")]),
+                        "default": .string("global_display_points"),
+                    ]),
+                    "x": .object(["type": .string("number")]),
+                    "y": .object(["type": .string("number")]),
+                    "width": .object([
+                        "type": .string("number"),
+                        "exclusiveMinimum": .int(0),
+                    ]),
+                    "height": .object([
+                        "type": .string("number"),
+                        "exclusiveMinimum": .int(0),
+                    ]),
+                ]),
+                "required": .array([
+                    .string("x"),
+                    .string("y"),
+                    .string("width"),
+                    .string("height"),
+                ]),
+                "additionalProperties": .bool(false),
+            ]),
+            "format": .object([
+                "type": .string("string"),
+                "enum": .array([.string("mp4")]),
+                "default": .string("mp4"),
+            ]),
+            "frame_rate": .object([
+                "type": .string("integer"),
+                "enum": .array([.int(15), .int(30), .int(60)]),
+                "default": .int(30),
+            ]),
+            "quality": .object([
+                "type": .string("string"),
+                "enum": .array([.string("standard"), .string("high")]),
+                "default": .string("standard"),
+            ]),
+            "include_cursor": .object([
+                "type": .string("boolean"),
+                "default": .bool(false),
+            ]),
+            "exclude_mupaw_ui": .object([
+                "type": .string("boolean"),
+                "default": .bool(true),
+            ]),
+            "file_name": .object([
+                "type": .string("string"),
+                "description": .string(
+                    "Optional safe base name. Mupaw controls the owner-only Recordings directory."
+                ),
+            ]),
+        ]),
+        "required": .array([.string("mode")]),
+        "additionalProperties": .bool(false),
+    ])
+
+    private static let recordingSessionSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "session_id": .object([
+                "type": .string("string"),
+                "description": .string("Recording session UUID returned by mupaw_recording_start."),
+            ])
+        ]),
+        "required": .array([.string("session_id")]),
+        "additionalProperties": .bool(false),
+    ])
 
     private static let projectIDProperty: Value = .object([
         "type": .string("string"),

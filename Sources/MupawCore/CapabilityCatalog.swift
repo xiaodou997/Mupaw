@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, capture, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and PNG export to a local Agent."
+                        "Exposes status, screenshot capture, video-only MP4 recording sessions, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -70,10 +70,10 @@ public enum CapabilityCatalog {
                 ),
                 .init(
                     id: "recording",
-                    title: "MP4 and GIF recording",
-                    availability: .planned,
+                    title: "Video-only H.264 MP4 recording",
+                    availability: .available,
                     detail:
-                        "Screen, system audio, microphone, camera, click, keystroke, and export pipelines are planned for M1–M3."
+                        "Records an explicit display, independent window, or single-display structured region through ScreenCaptureKit and AVAssetWriter with start, status, stop, cancel, metadata, SHA-256, and preview. Audio, camera, event overlays, GIF, and zoom remain planned."
                 ),
                 .init(
                     id: "automatic-zoom",

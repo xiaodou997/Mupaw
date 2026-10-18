@@ -28,6 +28,11 @@ private enum AppCaptureError: Error, LocalizedError {
     }
 }
 
+enum AppWorkspaceMode: String, CaseIterable, Hashable {
+    case screenshot
+    case recording
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -39,11 +44,16 @@ final class AppModel {
         inputMonitoring: .denied
     )
     private(set) var sources: [CaptureSourceDescriptor] = []
+    var selectedWorkspaceMode: AppWorkspaceMode = .screenshot
     var selectedCaptureMode: ScreenshotCaptureMode = .region {
         didSet { normalizeSelectedSource() }
     }
     var selectedSourceID: String?
     var includeCursor = false
+    var recordingFrameRate = 30
+    var recordingQuality: RecordingVideoQuality = .standard
+    private(set) var currentRecordingStatus: RecordingSessionStatus?
+    private(set) var lastRecordingArtifact: RecordingArtifact?
     private(set) var lastArtifact: ScreenshotArtifact?
     private(set) var activeProject: ScreenshotProjectState?
     private(set) var activeProjectPreview: ProjectPreviewResult?
@@ -58,6 +68,10 @@ final class AppModel {
     private(set) var isSelectingRegion = false
     private(set) var hotKeyRegistrations: [GlobalHotKeyRegistration] = []
     var errorMessage: String?
+
+    var hasActiveRecording: Bool {
+        currentRecordingStatus?.phase.isActive == true || recordingService.hasActiveRecording
+    }
 
     var captureSources: [CaptureSourceDescriptor] {
         switch selectedCaptureMode {
@@ -82,6 +96,7 @@ final class AppModel {
 
     private let paths: MupawPaths
     private let captureService: CaptureService
+    private let recordingService: RecordingService
     private let projectService: ScreenshotProjectService
     private let permissionService = PermissionService()
     private let regionSelectionController = RegionSelectionController()
@@ -90,12 +105,14 @@ final class AppModel {
     private var workspaceObserver: NSObjectProtocol?
     private var lastExternalApplicationProcessID: Int32?
     private var hasStarted = false
+    private var recordingStatusTask: Task<Void, Never>?
 
     init() {
         do {
             let paths = try MupawPaths.live()
             self.paths = paths
             self.captureService = CaptureService(paths: paths)
+            self.recordingService = RecordingService(paths: paths)
             self.projectService = ScreenshotProjectService(
                 paths: paths,
                 textRecognizer: IsolatedVisionScreenshotTextRecognizer()
@@ -107,6 +124,7 @@ final class AppModel {
             )
             self.paths = fallback
             self.captureService = CaptureService(paths: fallback)
+            self.recordingService = RecordingService(paths: fallback)
             self.projectService = ScreenshotProjectService(
                 paths: fallback,
                 textRecognizer: IsolatedVisionScreenshotTextRecognizer()
@@ -148,6 +166,9 @@ final class AppModel {
     }
 
     func shutdown() {
+        recordingStatusTask?.cancel()
+        recordingStatusTask = nil
+        recordingService.cancelActiveRecordingForShutdown()
         regionSelectionController.cancel()
         hotKeyManager?.stop()
         hotKeyManager = nil
@@ -416,6 +437,109 @@ final class AppModel {
         isPointColorSampling = false
     }
 
+    func startSelectedRecording() async {
+        guard !isBusy, !recordingService.hasActiveRecording else {
+            NSSound.beep()
+            errorMessage = L10n.string("recording.error.operation_in_progress.short")
+            return
+        }
+        guard permissions.screenCapture == .authorized else {
+            errorMessage = AppCaptureError.permissionRequired.localizedDescription
+            return
+        }
+
+        isBusy = true
+        errorMessage = nil
+        defer {
+            isBusy = false
+            isSelectingRegion = false
+        }
+
+        do {
+            let region: CaptureRegion?
+            if selectedCaptureMode == .region {
+                isSelectingRegion = true
+                region = try await regionSelectionController.selectRegion()
+                isSelectingRegion = false
+                try await Task.sleep(for: .milliseconds(120))
+            } else {
+                region = nil
+            }
+
+            let sourceID: String?
+            if selectedCaptureMode == .region {
+                sourceID = nil
+            } else {
+                guard let selectedSourceID else {
+                    throw AppCaptureError.sourceRequired
+                }
+                sourceID = selectedSourceID
+            }
+
+            let status = try await recordingService.startRecording(
+                RecordingRequest(
+                    mode: selectedCaptureMode,
+                    sourceID: sourceID,
+                    region: region,
+                    frameRate: recordingFrameRate,
+                    quality: recordingQuality,
+                    includeCursor: includeCursor,
+                    excludeMupawUI: selectedCaptureMode != .window
+                )
+            )
+            selectedWorkspaceMode = .recording
+            applyRecordingStatus(status)
+        } catch let error as RegionSelectionError where error == .cancelled {
+            errorMessage = nil
+        } catch {
+            errorMessage = localizedMessage(for: error)
+            refreshPermissions()
+        }
+    }
+
+    func stopCurrentRecording() async {
+        guard let sessionID = currentRecordingStatus?.id ?? recordingService.activeSessionID,
+            !isBusy
+        else {
+            return
+        }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            let status = try await recordingService.stopRecording(
+                RecordingSessionRequest(sessionID: sessionID)
+            )
+            applyRecordingStatus(status)
+        } catch {
+            errorMessage = localizedMessage(for: error)
+            if let status = try? recordingService.recordingStatus(
+                RecordingSessionRequest(sessionID: sessionID)
+            ) {
+                applyRecordingStatus(status)
+            }
+        }
+    }
+
+    func cancelCurrentRecording() async {
+        guard let sessionID = currentRecordingStatus?.id ?? recordingService.activeSessionID,
+            !isBusy
+        else {
+            return
+        }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            let status = try await recordingService.cancelRecording(
+                RecordingSessionRequest(sessionID: sessionID)
+            )
+            applyRecordingStatus(status)
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
     func retryGlobalHotKeys() {
         hotKeyRegistrations = hotKeyManager?.start() ?? []
     }
@@ -423,7 +547,7 @@ final class AppModel {
     private func performCapture(
         _ operation: () async throws -> ScreenshotArtifact
     ) async {
-        guard !isBusy else {
+        guard !isBusy, !recordingService.hasActiveRecording else {
             NSSound.beep()
             errorMessage = AppCaptureError.operationInProgress.localizedDescription
             return
@@ -549,6 +673,43 @@ final class AppModel {
         lastColorSample = nil
         selectedOCRObservationID = nil
         isPointColorSampling = false
+    }
+
+    private func applyRecordingStatus(_ status: RecordingSessionStatus) {
+        currentRecordingStatus = status
+        if let artifact = status.artifact {
+            lastRecordingArtifact = artifact
+        }
+        if status.phase.isActive {
+            startRecordingStatusUpdates(sessionID: status.id)
+        } else {
+            recordingStatusTask?.cancel()
+            recordingStatusTask = nil
+        }
+    }
+
+    private func startRecordingStatusUpdates(sessionID: String) {
+        if recordingStatusTask != nil { return }
+        recordingStatusTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                do {
+                    let status = try self.recordingService.recordingStatus(
+                        RecordingSessionRequest(sessionID: sessionID)
+                    )
+                    self.applyRecordingStatus(status)
+                    if !status.phase.isActive { return }
+                } catch {
+                    self.recordingStatusTask = nil
+                    return
+                }
+            }
+        }
     }
 
     private func captureInteractiveRegionArtifact() async throws -> ScreenshotArtifact {
@@ -838,6 +999,52 @@ final class AppModel {
         }
     }
 
+    private func rpcFailure(
+        requestID: String,
+        error: RecordingServiceError
+    ) -> AgentRPCResponse {
+        switch error {
+        case .sourceNotFound:
+            return .failure(
+                id: requestID,
+                code: .sourceNotFound,
+                message: error.localizedDescription
+            )
+        case .operationInProgress(let sessionID):
+            return .failure(
+                id: requestID,
+                code: .recordingInProgress,
+                message: error.localizedDescription,
+                details: .object(["session_id": .string(sessionID)])
+            )
+        case .sessionNotFound:
+            return .failure(
+                id: requestID,
+                code: .recordingNotFound,
+                message: error.localizedDescription
+            )
+        case .sessionNotActive:
+            return .failure(
+                id: requestID,
+                code: .recordingNotActive,
+                message: error.localizedDescription
+            )
+        case .sourceRequired, .sourceKindMismatch, .regionRequired, .invalidRegion,
+            .crossDisplayRegionUnsupported, .invalidFrameRate, .invalidFormat, .outputTooLarge:
+            return .failure(
+                id: requestID,
+                code: .invalidRequest,
+                message: error.localizedDescription
+            )
+        case .streamFailed, .writerFailed, .finalizationFailed:
+            return .failure(
+                id: requestID,
+                code: .recordingFailed,
+                message: error.localizedDescription
+            )
+        }
+    }
+
     private func handleRPC(_ request: AgentRPCRequest) async -> AgentRPCResponse {
         do {
             switch request.method {
@@ -887,6 +1094,29 @@ final class AppModel {
                         message: "Grant Screen & System Audio Recording permission to Mupaw, then retry."
                     )
                 }
+                guard !isBusy, !recordingService.hasActiveRecording else {
+                    return .failure(
+                        id: request.id,
+                        code: .captureInProgress,
+                        message: "Another Mupaw capture or recording operation is already in progress."
+                    )
+                }
+                isBusy = true
+                defer { isBusy = false }
+                let captureRequest = try request.parameters.decode(ScreenshotRequest.self)
+                let artifact = try await captureService.capture(captureRequest)
+                lastArtifact = artifact
+                return try .success(id: request.id, value: artifact)
+
+            case .recordingStart:
+                refreshPermissions(forceRefresh: false)
+                guard permissions.screenCapture == .authorized else {
+                    return .failure(
+                        id: request.id,
+                        code: .permissionRequired,
+                        message: "Grant Screen & System Audio Recording permission to Mupaw, then retry."
+                    )
+                }
                 guard !isBusy else {
                     return .failure(
                         id: request.id,
@@ -896,10 +1126,47 @@ final class AppModel {
                 }
                 isBusy = true
                 defer { isBusy = false }
-                let captureRequest = try request.parameters.decode(ScreenshotRequest.self)
-                let artifact = try await captureService.capture(captureRequest)
-                lastArtifact = artifact
-                return try .success(id: request.id, value: artifact)
+                let recordingRequest = try request.parameters.decode(RecordingRequest.self)
+                let status = try await recordingService.startRecording(recordingRequest)
+                selectedWorkspaceMode = .recording
+                applyRecordingStatus(status)
+                return try .success(id: request.id, value: status)
+
+            case .recordingStatus:
+                let sessionRequest = try request.parameters.decode(RecordingSessionRequest.self)
+                let status = try recordingService.recordingStatus(sessionRequest)
+                applyRecordingStatus(status)
+                return try .success(id: request.id, value: status)
+
+            case .recordingStop:
+                guard !isBusy else {
+                    return .failure(
+                        id: request.id,
+                        code: .captureInProgress,
+                        message: "Mupaw is already finalizing another operation."
+                    )
+                }
+                isBusy = true
+                defer { isBusy = false }
+                let sessionRequest = try request.parameters.decode(RecordingSessionRequest.self)
+                let status = try await recordingService.stopRecording(sessionRequest)
+                applyRecordingStatus(status)
+                return try .success(id: request.id, value: status)
+
+            case .recordingCancel:
+                guard !isBusy else {
+                    return .failure(
+                        id: request.id,
+                        code: .captureInProgress,
+                        message: "Mupaw is already finalizing another operation."
+                    )
+                }
+                isBusy = true
+                defer { isBusy = false }
+                let sessionRequest = try request.parameters.decode(RecordingSessionRequest.self)
+                let status = try await recordingService.cancelRecording(sessionRequest)
+                applyRecordingStatus(status)
+                return try .success(id: request.id, value: status)
 
             case .projectCreate:
                 let createRequest = try request.parameters.decode(ProjectCreateRequest.self)
@@ -956,6 +1223,8 @@ final class AppModel {
         } catch let error as ScreenshotProjectServiceError {
             return rpcFailure(requestID: request.id, error: error)
         } catch let error as CaptureServiceError {
+            return rpcFailure(requestID: request.id, error: error)
+        } catch let error as RecordingServiceError {
             return rpcFailure(requestID: request.id, error: error)
         } catch let error as DecodingError {
             return .failure(id: request.id, code: .invalidRequest, message: error.localizedDescription)

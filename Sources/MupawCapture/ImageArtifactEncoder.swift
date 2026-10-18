@@ -64,7 +64,7 @@ public enum ImageArtifactEncoder {
         )
     }
 
-    private static func makePreview(image: CGImage) throws -> ImagePreview {
+    public static func makePreview(image: CGImage) throws -> ImagePreview {
         let maximum = MupawConstants.previewMaximumDimension
         let scale = min(
             1,

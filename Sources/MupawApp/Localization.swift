@@ -106,6 +106,32 @@ enum L10n {
         }
     }
 
+    static func recordingQuality(_ quality: RecordingVideoQuality) -> String {
+        switch quality {
+        case .standard:
+            return string("recording.quality.standard")
+        case .high:
+            return string("recording.quality.high")
+        }
+    }
+
+    static func recordingPhase(_ phase: RecordingPhase) -> String {
+        switch phase {
+        case .starting:
+            return string("recording.phase.starting")
+        case .recording:
+            return string("recording.phase.recording")
+        case .stopping:
+            return string("recording.phase.stopping")
+        case .completed:
+            return string("recording.phase.completed")
+        case .failed:
+            return string("recording.phase.failed")
+        case .cancelled:
+            return string("recording.phase.cancelled")
+        }
+    }
+
     static func editKind(_ kind: ScreenshotEditKind) -> String {
         switch kind {
         case .arrow:

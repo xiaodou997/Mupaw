@@ -52,6 +52,13 @@ struct ContentView: View {
                 ProgressView()
                     .controlSize(.small)
             }
+            if let status = model.currentRecordingStatus, status.phase.isActive {
+                StatusPill(
+                    title:
+                        "\(L10n.recordingPhase(status.phase)) · \(RecordingTimeFormatter.string(status.elapsedDurationSeconds))",
+                    systemImage: "record.circle.fill"
+                )
+            }
             StatusPill(
                 title: model.permissions.screenCapture == .authorized
                     ? L10n.string("status.capture_ready")
@@ -66,8 +73,21 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            captureGroup
-            shortcutsGroup
+            Picker(L10n.string("workspace.mode.label"), selection: $model.selectedWorkspaceMode) {
+                Text(L10n.string("workspace.mode.screenshot"))
+                    .tag(AppWorkspaceMode.screenshot)
+                Text(L10n.string("workspace.mode.recording"))
+                    .tag(AppWorkspaceMode.recording)
+            }
+            .pickerStyle(.segmented)
+            .disabled(model.hasActiveRecording)
+
+            if model.selectedWorkspaceMode == .screenshot {
+                captureGroup
+                shortcutsGroup
+            } else {
+                RecordingSidebarGroup(model: model)
+            }
             permissionsGroup
         }
         .padding(16)
@@ -179,7 +199,9 @@ struct ContentView: View {
 
     private var detail: some View {
         Group {
-            if model.activeProject != nil {
+            if model.selectedWorkspaceMode == .recording || model.hasActiveRecording {
+                RecordingDetailView(model: model)
+            } else if model.activeProject != nil {
                 ScreenshotEditorView(model: model)
             } else {
                 VStack(alignment: .leading, spacing: 14) {
@@ -232,7 +254,9 @@ struct ContentView: View {
     }
 
     private var captureDisabled: Bool {
-        model.isBusy || model.permissions.screenCapture != .authorized
+        model.isBusy
+            || model.hasActiveRecording
+            || model.permissions.screenCapture != .authorized
     }
 
     private var captureButtonTitle: String {

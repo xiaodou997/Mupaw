@@ -29,6 +29,9 @@ REQUIRED_LOCALIZABLE_KEYS = {
     "editor.tool.style",
     "editor.style.preset.ocean",
     "editing.detail.invalid_visual_style",
+    "workspace.mode.recording",
+    "recording.action.start",
+    "recording.error.finalization_failed.format",
 }
 REQUIRED_INFO_KEYS = {
     "NSCameraUsageDescription",

@@ -26,6 +26,35 @@ struct MupawApp: App {
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     var onTerminate: (() -> Void)?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.presentMainWindow()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        presentMainWindow()
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        presentMainWindow()
+        return true
+    }
+
+    private func presentMainWindow() {
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.canBecomeKey }) {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         onTerminate?()
     }

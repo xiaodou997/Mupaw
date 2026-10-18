@@ -23,6 +23,10 @@ EXPECTED_TOOLS = {
     "mupaw_capabilities_get",
     "mupaw_sources_list",
     "mupaw_screenshot_capture",
+    "mupaw_recording_start",
+    "mupaw_recording_status",
+    "mupaw_recording_stop",
+    "mupaw_recording_cancel",
     "mupaw_project_create",
     "mupaw_project_get",
     "mupaw_project_apply_edits",
@@ -572,6 +576,58 @@ def run(
         )
         tool_schema_check["m1dStyleCommands"] = sorted(required_style_commands)
 
+        recording_start_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict) and item.get("name") == "mupaw_recording_start"
+            ),
+            None,
+        )
+        recording_start_schema = (
+            recording_start_tool.get("inputSchema")
+            if isinstance(recording_start_tool, dict)
+            else None
+        )
+        recording_start_properties = (
+            recording_start_schema.get("properties")
+            if isinstance(recording_start_schema, dict)
+            else None
+        )
+        required_recording_properties = {
+            "mode",
+            "source_id",
+            "region",
+            "format",
+            "frame_rate",
+            "quality",
+            "include_cursor",
+            "exclude_mupaw_ui",
+            "file_name",
+        }
+        if not isinstance(recording_start_properties, dict) or not required_recording_properties.issubset(
+            recording_start_properties
+        ):
+            raise SmokeFailure("mupaw_recording_start schema omitted M1e properties")
+        for recording_tool_name in (
+            "mupaw_recording_status",
+            "mupaw_recording_stop",
+            "mupaw_recording_cancel",
+        ):
+            item = next(
+                (
+                    tool
+                    for tool in tools
+                    if isinstance(tool, dict) and tool.get("name") == recording_tool_name
+                ),
+                None,
+            )
+            schema = item.get("inputSchema") if isinstance(item, dict) else None
+            properties = schema.get("properties") if isinstance(schema, dict) else None
+            if not isinstance(properties, dict) or "session_id" not in properties:
+                raise SmokeFailure(f"{recording_tool_name} schema omitted session_id")
+        tool_schema_check["m1eRecordingStartProperties"] = sorted(required_recording_properties)
+
         ocr_tool = next(
             (
                 item
@@ -657,6 +713,7 @@ def run(
                 "ocr",
                 "color-sampling",
                 "visual-style",
+                "recording",
             }
             missing_available = expected_available - available_ids
             if missing_available:
