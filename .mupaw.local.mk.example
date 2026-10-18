@@ -1,0 +1,8 @@
+# Copy this file to `.mupaw.local.mk` to keep a stable local code-signing
+# identity across development rebuilds. The local file is ignored by Git.
+#
+# Examples:
+# DEV_CODE_SIGN_IDENTITY := Apple Development: Your Name (TEAMID)
+# DEV_CODE_SIGN_IDENTITY := Developer ID Application: Your Name (TEAMID)
+
+DEV_CODE_SIGN_IDENTITY := -

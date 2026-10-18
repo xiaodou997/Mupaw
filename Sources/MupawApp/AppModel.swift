@@ -78,8 +78,8 @@ final class AppModel {
         rpcStatus = L10n.string("rpc.stopped")
     }
 
-    func refreshPermissions() {
-        permissions = permissionService.snapshot()
+    func refreshPermissions(forceRefresh: Bool = true) {
+        permissions = permissionService.snapshot(forceRefresh: forceRefresh)
     }
 
     func requestScreenCapturePermission() {
@@ -89,7 +89,7 @@ final class AppModel {
 
     func refreshSources() async {
         await performBusyWork {
-            let result = try await captureService.listSources()
+            let result = try await captureService.listSources(forceRefresh: true)
             sources = result.sources
             if selectedSourceID == nil || !sources.contains(where: { $0.id == selectedSourceID }) {
                 selectedSourceID = sources.first?.id
@@ -142,7 +142,7 @@ final class AppModel {
                 return try .success(id: request.id, value: EmptyPayload())
 
             case .appStatus:
-                refreshPermissions()
+                refreshPermissions(forceRefresh: false)
                 return try .success(
                     id: request.id,
                     value: AppStatusResult(
@@ -158,11 +158,11 @@ final class AppModel {
                 return try .success(id: request.id, value: CapabilityCatalog.current)
 
             case .permissionsGet:
-                refreshPermissions()
+                refreshPermissions(forceRefresh: false)
                 return try .success(id: request.id, value: permissions)
 
             case .sourcesList:
-                refreshPermissions()
+                refreshPermissions(forceRefresh: false)
                 guard permissions.screenCapture == .authorized else {
                     return .failure(
                         id: request.id,
@@ -175,7 +175,7 @@ final class AppModel {
                 return try .success(id: request.id, value: result)
 
             case .screenshotCapture:
-                refreshPermissions()
+                refreshPermissions(forceRefresh: false)
                 guard permissions.screenCapture == .authorized else {
                     return .failure(
                         id: request.id,

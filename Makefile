@@ -6,8 +6,11 @@ DERIVED_DATA ?= .build/DerivedData
 APP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Mupaw.app
 MCP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/mupaw-mcp
 DEV_APP_PATH ?= $(HOME)/Applications/Mupaw.app
+DEV_CODE_SIGN_IDENTITY ?= -
 
-.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings mcp-smoke mcp-smoke-running clean open
+-include .mupaw.local.mk
+
+.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings mcp-smoke mcp-smoke-running mcp-smoke-capture clean open
 
 generate:
 	xcodegen generate
@@ -44,8 +47,12 @@ install-dev: build
 	@mkdir -p "$(dir $(DEV_APP_PATH))"
 	@rm -rf "$(DEV_APP_PATH)"
 	@ditto --rsrc --extattr --acl "$(APP_PATH)" "$(DEV_APP_PATH)"
+	@if [[ "$(DEV_CODE_SIGN_IDENTITY)" != "-" ]]; then \
+		codesign --force --deep --sign "$(DEV_CODE_SIGN_IDENTITY)" --timestamp=none "$(DEV_APP_PATH)"; \
+	fi
 	@codesign --verify --deep --strict "$(DEV_APP_PATH)"
 	@printf 'Installed development app: %s\n' "$(DEV_APP_PATH)"
+	@printf 'Development signing identity: %s\n' "$(DEV_CODE_SIGN_IDENTITY)"
 
 uninstall-dev:
 	@osascript -e 'tell application id "com.xiaodou.mupaw" to quit' >/dev/null 2>&1 || true
@@ -63,6 +70,9 @@ mcp-smoke: build
 
 mcp-smoke-running: build
 	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running
+
+mcp-smoke-capture: build
+	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running --capture-one
 
 open: generate
 	open $(PROJECT)

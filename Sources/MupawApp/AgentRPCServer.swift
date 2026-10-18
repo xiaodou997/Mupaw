@@ -142,9 +142,69 @@ final class AgentRPCServer: @unchecked Sendable {
                 return
             }
 
+            do {
+                try Self.configureClientSocket(clientSocket)
+            } catch {
+                Darwin.close(clientSocket)
+                continue
+            }
+
             Task.detached(priority: .userInitiated) { [handler, token] in
                 await Self.handleClient(socketFD: clientSocket, expectedToken: token, handler: handler)
             }
+        }
+    }
+
+    private static func configureClientSocket(_ socketFD: Int32) throws {
+        let flags = Darwin.fcntl(socketFD, F_GETFL, 0)
+        guard flags >= 0 else {
+            throw POSIXServerError(operation: "fcntl get accepted socket flags")
+        }
+        guard Darwin.fcntl(socketFD, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+            throw POSIXServerError(operation: "fcntl clear accepted socket nonblocking")
+        }
+
+        var timeoutValue = timeval(
+            tv_sec: MupawConstants.rpcSocketTimeoutSeconds,
+            tv_usec: 0
+        )
+        let receiveTimeoutResult = withUnsafePointer(to: &timeoutValue) { pointer in
+            Darwin.setsockopt(
+                socketFD,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                pointer,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+        }
+        guard receiveTimeoutResult == 0 else {
+            throw POSIXServerError(operation: "setsockopt accepted receive timeout")
+        }
+
+        let sendTimeoutResult = withUnsafePointer(to: &timeoutValue) { pointer in
+            Darwin.setsockopt(
+                socketFD,
+                SOL_SOCKET,
+                SO_SNDTIMEO,
+                pointer,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+        }
+        guard sendTimeoutResult == 0 else {
+            throw POSIXServerError(operation: "setsockopt accepted send timeout")
+        }
+
+        var noSignal: Int32 = 1
+        guard
+            Darwin.setsockopt(
+                socketFD,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSignal,
+                socklen_t(MemoryLayout<Int32>.size)
+            ) == 0
+        else {
+            throw POSIXServerError(operation: "setsockopt accepted no-sigpipe")
         }
     }
 
@@ -193,6 +253,9 @@ final class AgentRPCServer: @unchecked Sendable {
         while data.count <= MupawConstants.maximumRPCFrameBytes {
             let count = Darwin.recv(socketFD, &buffer, buffer.count, 0)
             if count == 0 { break }
+            if count < 0 && errno == EINTR {
+                continue
+            }
             guard count > 0 else {
                 throw POSIXServerError(operation: "receive")
             }
@@ -230,6 +293,9 @@ final class AgentRPCServer: @unchecked Sendable {
             var sent = 0
             while sent < data.count {
                 let count = Darwin.send(socketFD, base.advanced(by: sent), data.count - sent, 0)
+                if count < 0 && errno == EINTR {
+                    continue
+                }
                 guard count > 0 else {
                     throw POSIXServerError(operation: "send")
                 }

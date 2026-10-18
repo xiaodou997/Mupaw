@@ -10,6 +10,7 @@ M0 is complete only when all of the following are true on a real macOS 26+ machi
 - `make localization-check` confirms English and Simplified Chinese key parity;
 - `make mcp-smoke` validates MCP initialization, tool discovery, and the app-status contract;
 - the source tree contains no generated build artifacts or secrets.
+- `LICENSE`, `README.md`, and `CONTRIBUTING.md` consistently identify `PolyForm-Noncommercial-1.0.0`, preserve the required notice, and describe Mupaw as source-available rather than OSI open source.
 
 ## Native app
 
@@ -27,6 +28,9 @@ M0 is complete only when all of the following are true on a real macOS 26+ machi
 - the app starts a loopback-only authenticated RPC listener;
 - the connection descriptor is owner-only and is removed on clean shutdown;
 - malformed, oversized, unauthenticated, and unknown-method requests fail explicitly;
+- accepted RPC sockets use bounded blocking I/O, retry interrupted calls, and do not inherit the listener's nonblocking mode;
+- permission probes are cached briefly so concurrent Agent status checks do not hammer macOS TCC services;
+- source enumeration is cached briefly so concurrent Agent discovery calls share one ScreenCaptureKit refresh;
 - the MCP helper reports when Mupaw is not running rather than pretending success.
 
 ## MCP
@@ -39,7 +43,7 @@ A real MCP client can:
 4. call `mupaw_screenshot_capture` with a returned source ID;
 5. receive structured artifact metadata and an image preview.
 
-`make mcp-smoke-running` covers steps 1–3 against the live app bridge, including the explicit `permission_required` path before authorization. Steps 4–5 additionally require the user to grant Screen & System Audio Recording permission.
+`make mcp-smoke-running` covers steps 1–3 against the live app bridge, including the explicit `permission_required` path before authorization. After authorization, `make mcp-smoke-capture` covers steps 4–5 and validates the real PNG file, SHA-256, metadata, and MCP image preview.
 
 ## Deferred
 

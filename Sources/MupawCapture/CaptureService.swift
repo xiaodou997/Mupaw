@@ -27,6 +27,8 @@ public enum CaptureServiceError: Error, LocalizedError {
 
 @MainActor
 public final class CaptureService {
+    private static let sourceCacheDuration: TimeInterval = 5
+
     private enum SourceReference {
         case display(SCDisplay)
         case window(SCWindow)
@@ -35,12 +37,23 @@ public final class CaptureService {
     private let paths: MupawPaths
     private var sourceReferences: [String: SourceReference] = [:]
     private var descriptors: [String: CaptureSourceDescriptor] = [:]
+    private var cachedSourceList: SourceListResult?
+    private var cachedSourceListAtUptime: TimeInterval?
 
     public init(paths: MupawPaths) {
         self.paths = paths
     }
 
-    public func listSources() async throws -> SourceListResult {
+    public func listSources(forceRefresh: Bool = false) async throws -> SourceListResult {
+        let now = ProcessInfo.processInfo.systemUptime
+        if !forceRefresh,
+            let cachedSourceList,
+            let cachedSourceListAtUptime,
+            now - cachedSourceListAtUptime < Self.sourceCacheDuration
+        {
+            return cachedSourceList
+        }
+
         let content = try await SCShareableContent.excludingDesktopWindows(
             false,
             onScreenWindowsOnly: true
@@ -98,12 +111,15 @@ public final class CaptureService {
 
         sourceReferences = references
         descriptors = Dictionary(uniqueKeysWithValues: values.map { ($0.id, $0) })
-        return SourceListResult(refreshedAt: Date(), sources: values)
+        let result = SourceListResult(refreshedAt: Date(), sources: values)
+        cachedSourceList = result
+        cachedSourceListAtUptime = now
+        return result
     }
 
     public func capture(_ request: ScreenshotRequest) async throws -> ScreenshotArtifact {
         if sourceReferences[request.sourceID] == nil {
-            _ = try await listSources()
+            _ = try await listSources(forceRefresh: true)
         }
         guard let source = sourceReferences[request.sourceID],
             let descriptor = descriptors[request.sourceID]

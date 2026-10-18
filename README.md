@@ -1,6 +1,8 @@
 # Mupaw
 
-Mupaw is a native macOS 26+ screenshot and screen-recording application designed for both people and Agents.
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-5b5b5b.svg)](LICENSE)
+
+Mupaw is a source-available native macOS 26+ screenshot and screen-recording application designed for both people and Agents.
 
 The first development milestone focuses on a reliable foundation:
 
@@ -42,6 +44,14 @@ The stable development path is:
 ~/Applications/Mupaw.app
 ```
 
+macOS privacy permissions are tied to the app's code identity. The default local build is ad-hoc signed, so replacing it can require granting Screen & System Audio Recording permission again. To keep a stable identity, copy `.mupaw.local.mk.example` to `.mupaw.local.mk` and set an Apple Development or Developer ID Application identity available in your keychain:
+
+```make
+DEV_CODE_SIGN_IDENTITY := Apple Development: Your Name (TEAMID)
+```
+
+The local signing file is ignored by Git. Configure the identity before granting screen-recording permission for the most stable development workflow.
+
 Open the macOS Screen & System Audio Recording settings pane:
 
 ```bash
@@ -58,6 +68,12 @@ After Mupaw is running, validate the live app bridge as well:
 
 ```bash
 make mcp-smoke-running
+```
+
+After granting Screen & System Audio Recording permission, run a real MCP screenshot and validate its file, hash, metadata, and image preview:
+
+```bash
+make mcp-smoke-capture
 ```
 
 Open the generated project when UI debugging is needed:
@@ -85,4 +101,10 @@ Run `make localization-check` after changing translations. It verifies that both
 
 ## Licensing
 
-No public license has been frozen yet. GPL-3.0 permits commercial use, while a strict “no commercial use by others” requirement needs a non-commercial source license and is not OSI open source. The repository must not add a misleading GPL notice until that choice is resolved explicitly.
+Mupaw is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE), identified by SPDX as `PolyForm-Noncommercial-1.0.0`.
+
+You may inspect, use, modify, and redistribute Mupaw only for purposes permitted by `LICENSE`. The public license does not grant commercial-use rights. Commercial use requires separate written permission from the copyright holder, and Mupaw does not currently offer a commercial license.
+
+PolyForm Noncommercial is not an OSI-approved open-source license, so Mupaw must be described as **source-available**, not open source. Copies and distributions must preserve the `Required Notice:` line in `LICENSE`. Third-party dependencies retain their own license terms.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and copyright rules.

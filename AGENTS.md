@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-Mupaw is a macOS 26+ native screenshot and recording tool. Human UI and Agent/MCP operations must call the same domain services and produce the same project state. Do not implement Agent control by simulating clicks in Mupaw's UI.
+Mupaw is a source-available macOS 26+ native screenshot and recording tool. Human UI and Agent/MCP operations must call the same domain services and produce the same project state. Do not implement Agent control by simulating clicks in Mupaw's UI.
 
 ## Architecture rules
 
@@ -22,6 +22,14 @@ Mupaw is a macOS 26+ native screenshot and recording tool. Human UI and Agent/MC
 - Privacy usage descriptions must be translated in `InfoPlist.strings`.
 - Every supported language must contain the same localization key set.
 - Run `make localization-check` whenever localized resources change.
+
+## Licensing rules
+
+- Mupaw uses `PolyForm-Noncommercial-1.0.0`; commercial use is not granted by the public license.
+- Describe the project as source-available. Do not label it OSI open source or GPL-licensed.
+- Preserve the complete `LICENSE` text and its `Required Notice:` line.
+- Contributions are accepted under the same license; third-party dependencies retain their own terms.
+- Do not imply that a commercial license is available unless the maintainer explicitly changes that policy in writing.
 
 ## Code quality
 

@@ -6,6 +6,7 @@ public enum MupawConstants {
     public static let appVersion = "0.1.0-dev"
     public static let rpcProtocolVersion = 1
     public static let maximumRPCFrameBytes = 4 * 1024 * 1024
+    public static let rpcSocketTimeoutSeconds = 30
     public static let previewMaximumDimension = 1_280
 
 }

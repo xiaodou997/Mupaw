@@ -5,7 +5,10 @@ public struct AgentRPCClient: Sendable {
     public let descriptor: AgentConnectionDescriptor
     public let timeout: TimeInterval
 
-    public init(descriptor: AgentConnectionDescriptor, timeout: TimeInterval = 5) {
+    public init(
+        descriptor: AgentConnectionDescriptor,
+        timeout: TimeInterval = TimeInterval(MupawConstants.rpcSocketTimeoutSeconds)
+    ) {
         self.descriptor = descriptor
         self.timeout = timeout
     }
@@ -34,7 +37,9 @@ public struct AgentRPCClient: Sendable {
         }.value
 
         guard response.id == request.id else {
-            throw AgentRPCClientError.malformedResponse("Response identifier did not match the request.")
+            throw AgentRPCClientError.malformedResponse(
+                "Response identifier mismatch: expected \(request.id), received \(response.id)."
+            )
         }
         if let error = response.error {
             throw AgentRPCClientError.requestFailed(error)
@@ -43,6 +48,51 @@ public struct AgentRPCClient: Sendable {
             throw AgentRPCClientError.malformedResponse("A successful response did not include a result.")
         }
         return try result.decode(responseType)
+    }
+
+    private static func configureSocket(_ socketFD: Int32, timeout: TimeInterval) throws {
+        var timeoutValue = timeval(
+            tv_sec: Int(timeout),
+            tv_usec: Int32((timeout - floor(timeout)) * 1_000_000)
+        )
+        let receiveTimeoutResult = withUnsafePointer(to: &timeoutValue) { pointer in
+            Darwin.setsockopt(
+                socketFD,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                pointer,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+        }
+        guard receiveTimeoutResult == 0 else {
+            throw AgentRPCClientError.appUnavailable(errnoMessage(prefix: "setsockopt receive timeout"))
+        }
+
+        let sendTimeoutResult = withUnsafePointer(to: &timeoutValue) { pointer in
+            Darwin.setsockopt(
+                socketFD,
+                SOL_SOCKET,
+                SO_SNDTIMEO,
+                pointer,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+        }
+        guard sendTimeoutResult == 0 else {
+            throw AgentRPCClientError.appUnavailable(errnoMessage(prefix: "setsockopt send timeout"))
+        }
+
+        var noSignal: Int32 = 1
+        guard
+            Darwin.setsockopt(
+                socketFD,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSignal,
+                socklen_t(MemoryLayout<Int32>.size)
+            ) == 0
+        else {
+            throw AgentRPCClientError.appUnavailable(errnoMessage(prefix: "setsockopt no-sigpipe"))
+        }
     }
 
     private static func performRequest(
@@ -56,26 +106,7 @@ public struct AgentRPCClient: Sendable {
         }
         defer { Darwin.close(socketFD) }
 
-        var timeoutValue = timeval(
-            tv_sec: Int(timeout),
-            tv_usec: Int32((timeout - floor(timeout)) * 1_000_000)
-        )
-        withUnsafePointer(to: &timeoutValue) { pointer in
-            _ = Darwin.setsockopt(
-                socketFD,
-                SOL_SOCKET,
-                SO_RCVTIMEO,
-                pointer,
-                socklen_t(MemoryLayout<timeval>.size)
-            )
-            _ = Darwin.setsockopt(
-                socketFD,
-                SOL_SOCKET,
-                SO_SNDTIMEO,
-                pointer,
-                socklen_t(MemoryLayout<timeval>.size)
-            )
-        }
+        try configureSocket(socketFD, timeout: timeout)
 
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -124,6 +155,9 @@ public struct AgentRPCClient: Sendable {
                     data.count - sent,
                     0
                 )
+                if result < 0 && errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw AgentRPCClientError.appUnavailable(errnoMessage(prefix: "send"))
                 }
@@ -139,6 +173,9 @@ public struct AgentRPCClient: Sendable {
         while data.count <= MupawConstants.maximumRPCFrameBytes {
             let count = Darwin.recv(socketFD, &buffer, buffer.count, 0)
             if count == 0 { break }
+            if count < 0 && errno == EINTR {
+                continue
+            }
             guard count > 0 else {
                 throw AgentRPCClientError.appUnavailable(errnoMessage(prefix: "receive"))
             }
