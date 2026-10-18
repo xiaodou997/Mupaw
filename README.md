@@ -4,7 +4,7 @@
 
 Mupaw is a source-available native macOS 26+ screenshot and screen-recording application designed for both people and Agents.
 
-Mupaw currently includes the M0 foundation, M1a capture modes, and M1b screenshot editing:
+Mupaw currently includes the M0 foundation, M1a capture modes, M1b screenshot editing, and M1c local screenshot analysis:
 
 - explicit full-screen, window, and region PNG capture;
 - a native AppKit region-selection overlay with cancellation and multi-display-aware geometry;
@@ -12,13 +12,15 @@ Mupaw currently includes the M0 foundation, M1a capture modes, and M1b screensho
 - non-destructive, persisted, revisioned screenshot projects;
 - crop, arrow, text, and mosaic editing with selection, movement, resizing, deletion, reset, undo, and redo;
 - one shared renderer for UI preview, Agent preview, and final PNG export;
-- structured Agent capture and editing tools that never simulate Mupaw UI clicks;
+- native local OCR using Apple Vision in a signed short-lived helper process, including engine metadata, confidence, detected language, and original-image pixel rectangles;
+- point color picking and bounded region color summaries in sRGB;
+- structured Agent capture, editing, OCR, and color-analysis tools that never simulate Mupaw UI clicks;
 - ScreenCaptureKit capture owned by one stably signed app identity;
 - a local authenticated RPC bridge and MCP stdio server;
 - English and Simplified Chinese localization from the first version;
 - deterministic models, tests, and local acceptance commands.
 
-Long scrolling screenshots, OCR, color sampling, background/shadow styling, audio/video recording, camera overlay, GIF export, click highlights, keystroke display, and automatic zoom remain planned. They are not part of M1b.
+Long scrolling screenshots, background/shadow styling, audio/video recording, camera overlay, GIF export, click highlights, keystroke display, and automatic zoom remain planned. They are not part of M1c.
 
 ## Screenshot modes
 
@@ -60,6 +62,21 @@ Editing coordinates use original-image pixels with a top-left origin. Preview an
 Agents use `mupaw_project_create`, `mupaw_project_get`, `mupaw_project_apply_edits`, `mupaw_project_history`, `mupaw_project_preview`, and `mupaw_project_export`. Mutating calls require `expected_revision`; stale callers receive `project_version_conflict` rather than overwriting newer work.
 
 A batch is bounded to 1,000 commands and is atomic: any invalid command rejects the entire batch without advancing the revision.
+
+## OCR and color sampling
+
+M1c analyzes the immutable project original rather than the rendered annotations. The current crop is used as the default OCR or region-sampling area; callers can also provide an explicit rectangle in original-image pixels with a top-left origin. Analysis is read-only and never advances the project revision.
+
+The human editor provides:
+
+- local Apple Vision OCR for the current crop or full screenshot;
+- selectable OCR rectangles, ordered text, confidence, detected language, and one-click copy of all or individual results;
+- click-to-pick point color from the screenshot canvas;
+- a movable and resizable region sampler;
+- normalized sRGB RGBA values, hexadecimal RGB/RGBA, luminance, and dark/light classification;
+- average, center, and deterministic dominant colors for a region, plus the bounded sampled-pixel count.
+
+Agents use `mupaw_project_ocr` and `mupaw_project_color_sample`. OCR reports the effective Apple Vision engine (`vision_fast` or `vision_accurate`), recognition-language settings, result-level detected languages, and a language code for every observation (`und` when confidence is insufficient). It returns at most 512 bounded observations and limits combined recognized text to 256 KiB. Color region analysis downsamples to at most 256 pixels on either axis and at most 65,536 sampled pixels. Project get, OCR, color sampling, preview, and export all revalidate the copied original before reading it.
 
 ## Requirements
 
@@ -134,18 +151,19 @@ make mcp-negative-smoke
 make rpc-negative-smoke
 ```
 
-Run the complete M1b acceptance sequence. It checks formatting and localization, runs capture and editing tests, rebuilds and restarts the stably signed app, performs negative/concurrency checks, validates real captures, then creates, edits, previews, undoes, redoes, resets, restores, and exports a real project through MCP:
+Run the complete M1c acceptance sequence. It checks formatting and localization, runs capture/editing/analysis tests, rebuilds and restarts the stably signed app, performs negative and concurrency checks, validates M1a capture and M1b editing, then exercises real Vision OCR plus point and region color sampling through MCP:
 
 ```bash
-make m1b-acceptance
+make m1c-acceptance
 ```
 
-`make m1b-acceptance` expects the stable signing identity in `.mupaw.local.mk` and Screen & System Audio Recording permission to have been granted to `~/Applications/Mupaw.app`. Historical `m0-acceptance` and `m1a-acceptance` gates remain available.
+`make m1c-acceptance` expects the stable signing identity in `.mupaw.local.mk` and Screen & System Audio Recording permission to have been granted to `~/Applications/Mupaw.app`. Historical `m0-acceptance`, `m1a-acceptance`, and `m1b-acceptance` gates remain available.
 
-The focused editing flow can be rerun with:
+Focused flows can be rerun with:
 
 ```bash
 make m1b-smoke
+make m1c-smoke
 ```
 
 To validate UI/MCP conflict handling, begin an interactive region selection and, before completing it, run:
@@ -172,8 +190,9 @@ Run `make localization-check` after changing translations. It verifies that both
 
 - `Sources/MupawCore`: shared capture/editing models, geometry, bounded RPC codec, storage paths, and client code
 - `Sources/MupawCapture`: ScreenCaptureKit source, full-screen/window/region capture, composition, and permission services
-- `Sources/MupawEditing`: project persistence, edit validation, shared renderer, previews, history, and PNG export
-- `Sources/MupawApp`: native capture/editor UI, region overlay, global shortcuts, and local RPC server
+- `Sources/MupawEditing`: project persistence, edit validation, shared renderer, OCR analysis models/services, color sampling, previews, history, and PNG export
+- `Sources/MupawApp`: native capture/editor/analysis UI, region overlay, global shortcuts, and local RPC server
+- `Sources/MupawOCRHelper`: short-lived signed Apple Vision worker bundled under `Mupaw.app/Contents/Helpers`
 - `Sources/MupawMCP`: MCP stdio bridge for Agent clients
 - `Resources/MupawApp`: localized UI and Info.plist resources
 - `Tests`: deterministic unit tests

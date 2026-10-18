@@ -21,6 +21,7 @@ Mupaw.app
     ├── multi-display region planner and compositor
     ├── versioned screenshot project service
     ├── shared edit renderer and history service
+    ├── Vision OCR and bounded sRGB color analyzer
     └── capture, project, and export stores
 ```
 
@@ -34,7 +35,7 @@ Pure shared types and local transport support:
 
 - capability and permission models;
 - explicit screenshot modes and global point/pixel geometry;
-- source, artifact, project, edit-command, preview, and export descriptors;
+- source, artifact, project, edit-command, OCR, color-sampling, preview, and export descriptors;
 - original-image pixel geometry for crop and annotation objects;
 - deterministic multi-display region planning;
 - RPC request/response envelopes;
@@ -63,24 +64,26 @@ Application-owned non-destructive editing services:
 - bounded persisted undo/redo history and optimistic revision conflicts;
 - a single Core Graphics renderer used by preview and export;
 - bounded JPEG previews and owner-only PNG exports with SHA-256 metadata.
+- local Vision text recognition with bounded original-image pixel observations;
+- deterministic point/region color analysis in normalized sRGB with bounded sampling.
 
 ### Mupaw.app
 
 - SwiftUI application shell with explicit screenshot modes;
 - AppKit multi-display region-selection overlay with `Esc`/right-click cancellation;
 - Carbon global shortcuts with visible conflict state;
-- screenshot editor canvas, layer list, object inspector, and crop sheet;
+- screenshot editor canvas, layer list, object inspector, crop sheet, OCR overlays, and color-sampling controls;
 - lifecycle for the local RPC listener;
-- routing UI and RPC requests to the same capture and editing services;
-- capture, project, preview, and export presentation.
+- routing UI and RPC requests to the same capture, editing, and analysis services;
+- capture, project, OCR, color, preview, and export presentation.
 
 ### mupaw-mcp
 
 - official Swift MCP SDK over stdio;
-- a small, stable capture and editing tool catalog;
+- a small, stable capture, editing, OCR, and color-analysis tool catalog;
 - conversion between MCP values and Mupaw RPC values;
-- structured project creation, batch edits, history, preview, and export;
-- actionable errors for unavailable apps, permissions, stale revisions, invalid edits, and missing artifacts.
+- structured project creation, batch edits, history, OCR, color sampling, preview, and export;
+- actionable errors for unavailable apps, permissions, stale revisions, invalid edits/analysis, and missing artifacts.
 
 ## M1a screenshot contract
 
@@ -110,6 +113,16 @@ Preview and export call the same `ScreenshotRenderer`. The renderer loads the co
 
 The UI and MCP tools both call `ScreenshotProjectService`. Agent operations never manipulate the editor UI.
 
+## M1c screenshot analysis contract
+
+OCR and color sampling read the verified copied original and never mutate the project document, original file, edit content, or history. The current crop is used only as the default analysis rectangle. Rendered arrows, text annotations, and mosaic are not silently fed back into analysis.
+
+`project_ocr` runs Apple Vision locally through the signed `mupaw-ocr-helper` bundled inside `Mupaw.app`. The short-lived helper isolates Vision from ScreenCaptureKit and the long-running UI process, works only inside one owner-only temporary directory, returns bounded Codable data, and is terminated after a 120-second safety timeout. The RPC client allows 150 seconds for the cold Vision path. The service validates an optional original-image pixel rectangle, bounded language hints, recognition level, language-correction setting, and minimum confidence. Very large regions are scaled down to a maximum 4,096-pixel input dimension. Vision lower-left normalized rectangles are converted into original-image pixel rectangles with a top-left origin, filtered, deterministically ordered, and bounded before crossing RPC. Natural Language identifies each observation language only when the text and confidence are sufficient and returns `und` otherwise. The result reports the Vision engine, explicit recognition-language hints, detected languages, and is limited to 512 observations, 4,096 UTF-8 bytes per observation, and 256 KiB of joined text.
+
+`project_color_sample` converts the copied original into sRGB. Point mode reads exactly one in-bounds pixel. Region mode downsamples deterministically to at most 256 pixels on either axis and no more than 65,536 samples, then reports average, center, and a stable 5-bit-per-channel dominant color bucket. Each color reports normalized RGBA, hexadecimal RGB/RGBA, relative luminance, and dark/light classification together with the actual sample count.
+
+Both human UI and MCP call `ScreenshotProjectService`. Analysis accepts an optional `expected_revision` to detect stale context but never creates a new revision. Project get, OCR, color sampling, preview, and export first revalidate the copied original's SHA-256 and dimensions.
+
 ## Local RPC security
 
 - bind only to loopback;
@@ -134,7 +147,8 @@ The deterministic codec tests cover malformed structures and oversized-response 
 - M0: source enumeration, base screenshot, permissions, RPC, MCP — complete.
 - M1a: explicit full-screen/window/region capture, native selection overlay, global shortcuts, structured Agent regions — complete.
 - M1b: non-destructive crop, arrow, text, mosaic, history, shared preview/export, and Agent editing tools — complete.
-- M1c+: OCR, color sampling, visual styling, and base MP4 remain planned.
+- M1c: Apple Vision OCR, point color picking, bounded region color summaries, UI overlays, and Agent analysis tools — complete.
+- M1d+: visual styling and base MP4 remain planned.
 - M2: scrolling capture, background/rounded-corner/shadow styling, GIF.
 - M3: system audio, microphone, camera overlay, click and keystroke events, manual zoom timeline.
 - M4: automatic focus/zoom suggestions and editable super-recording workflow.

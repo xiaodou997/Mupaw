@@ -101,6 +101,20 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.mcp
         PRODUCT_NAME: mupaw-mcp
 
+  MupawOCRHelper:
+    type: tool
+    platform: macOS
+    productName: mupaw-ocr-helper
+    sources:
+      - Sources/MupawOCRHelper
+    dependencies:
+      - target: MupawCore
+      - target: MupawEditing
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.ocr-helper
+        PRODUCT_NAME: mupaw-ocr-helper
+
   MupawCoreTests:
     type: bundle.unit-test
     platform: macOS
@@ -132,6 +146,7 @@ schemes:
       targets:
         Mupaw: all
         MupawMCP: all
+        MupawOCRHelper: all
         MupawCoreTests: [test]
         MupawEditingTests: [test]
     test:
@@ -144,3 +159,8 @@ schemes:
     build:
       targets:
         MupawMCP: all
+
+  MupawOCRHelper:
+    build:
+      targets:
+        MupawOCRHelper: all

@@ -25,5 +25,17 @@ public enum MupawConstants {
     public static let maximumEditorFontSize = 512.0
     public static let minimumMosaicBlockSize = 2.0
     public static let maximumMosaicBlockSize = 256.0
+    public static let maximumOCRLanguages = 8
+    public static let maximumOCRLanguageTagUTF8Bytes = 64
+    public static let maximumOCRObservations = 512
+    public static let maximumOCRObservationTextUTF8Bytes = 4_096
+    public static let maximumOCRCombinedTextUTF8Bytes = 256 * 1_024
+    public static let maximumOCRInputDimension = 4_096
+    public static let minimumOCRLanguageIdentificationConfidence = 0.70
+    public static let minimumOCRASCIILettersForLanguageIdentification = 8
+    public static let ocrHelperTimeoutSeconds = 120.0
+    public static let ocrRPCTimeoutSeconds = 150.0
+    public static let maximumColorSampleDimension = 256
+    public static let maximumColorSamplePixels = 65_536
 
 }

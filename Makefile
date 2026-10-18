@@ -5,12 +5,13 @@ CONFIGURATION ?= Debug
 DERIVED_DATA ?= .build/DerivedData
 APP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Mupaw.app
 MCP_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/mupaw-mcp
+OCR_HELPER_PATH := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/mupaw-ocr-helper
 DEV_APP_PATH ?= $(HOME)/Applications/Mupaw.app
 DEV_CODE_SIGN_IDENTITY ?= -
 
 -include .mupaw.local.mk
 
-.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings mcp-smoke mcp-smoke-running mcp-smoke-capture mcp-smoke-full-screen mcp-negative-smoke mcp-capture-conflict-smoke m1b-smoke rpc-negative-smoke m0-acceptance m1a-acceptance m1b-acceptance clean open
+.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings mcp-smoke mcp-smoke-running mcp-smoke-capture mcp-smoke-full-screen mcp-negative-smoke mcp-capture-conflict-smoke m1b-smoke m1c-smoke rpc-negative-smoke m0-acceptance m1a-acceptance m1b-acceptance m1c-acceptance clean open
 
 generate:
 	xcodegen generate
@@ -47,8 +48,14 @@ install-dev: build
 	@mkdir -p "$(dir $(DEV_APP_PATH))"
 	@rm -rf "$(DEV_APP_PATH)"
 	@ditto --rsrc --extattr --acl "$(APP_PATH)" "$(DEV_APP_PATH)"
+	@mkdir -p "$(DEV_APP_PATH)/Contents/Helpers"
+	@ditto "$(OCR_HELPER_PATH)" "$(DEV_APP_PATH)/Contents/Helpers/mupaw-ocr-helper"
 	@if [[ "$(DEV_CODE_SIGN_IDENTITY)" != "-" ]]; then \
+		codesign --force --sign "$(DEV_CODE_SIGN_IDENTITY)" --timestamp=none "$(DEV_APP_PATH)/Contents/Helpers/mupaw-ocr-helper"; \
 		codesign --force --deep --sign "$(DEV_CODE_SIGN_IDENTITY)" --timestamp=none "$(DEV_APP_PATH)"; \
+	else \
+		codesign --force --sign - --timestamp=none "$(DEV_APP_PATH)/Contents/Helpers/mupaw-ocr-helper"; \
+		codesign --force --deep --sign - --timestamp=none "$(DEV_APP_PATH)"; \
 	fi
 	@codesign --verify --deep --strict "$(DEV_APP_PATH)"
 	@printf 'Installed development app: %s\n' "$(DEV_APP_PATH)"
@@ -86,6 +93,9 @@ mcp-capture-conflict-smoke: build
 m1b-smoke: build
 	python3 scripts/m1b_smoke.py --executable "$(MCP_PATH)"
 
+m1c-smoke: build
+	python3 scripts/m1c_smoke.py --executable "$(MCP_PATH)"
+
 rpc-negative-smoke:
 	python3 scripts/rpc_negative_smoke.py
 
@@ -110,6 +120,15 @@ m1b-acceptance:
 	python3 scripts/rpc_negative_smoke.py --wait-seconds 15
 	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running --negative --capture-one
 	python3 scripts/m1b_smoke.py --executable "$(MCP_PATH)"
+
+m1c-acceptance:
+	@$(MAKE) lint
+	@$(MAKE) test
+	@$(MAKE) run
+	python3 scripts/rpc_negative_smoke.py --wait-seconds 15
+	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running --negative --capture-one
+	python3 scripts/m1b_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m1c_smoke.py --executable "$(MCP_PATH)"
 
 open: generate
 	open $(PROJECT)

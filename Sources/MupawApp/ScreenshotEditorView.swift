@@ -5,6 +5,7 @@ import SwiftUI
 struct ScreenshotEditorView: View {
     @Bindable var model: AppModel
     @State private var showsCropEditor = false
+    @State private var showsColorRegionSampler = false
 
     var body: some View {
         if let project = model.activeProject,
@@ -31,6 +32,24 @@ struct ScreenshotEditorView: View {
                         L10n.string("editor.crop.unavailable.title"),
                         systemImage: "exclamationmark.triangle",
                         description: Text(L10n.string("editor.crop.unavailable.description"))
+                    )
+                    .frame(width: 520, height: 320)
+                }
+            }
+            .sheet(isPresented: $showsColorRegionSampler) {
+                if let original = NSImage(contentsOf: project.originalFileURL) {
+                    ColorRegionSamplerSheet(
+                        model: model,
+                        project: project,
+                        originalImage: original
+                    )
+                } else {
+                    ContentUnavailableView(
+                        L10n.string("editor.color.region.unavailable.title"),
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(
+                            L10n.string("editor.color.region.unavailable.description")
+                        )
                     )
                     .frame(width: 520, height: 320)
                 }
@@ -66,6 +85,28 @@ struct ScreenshotEditorView: View {
                 L10n.string("editor.tool.crop"),
                 systemImage: "crop",
                 action: { showsCropEditor = true }
+            )
+
+            Divider().frame(height: 24)
+
+            toolButton(
+                L10n.string("editor.tool.ocr"),
+                systemImage: "text.viewfinder",
+                action: { Task { await model.runOCR() } }
+            )
+            toolButton(
+                L10n.string("editor.tool.color_point"),
+                systemImage: "eyedropper",
+                isSelected: model.isPointColorSampling,
+                action: { model.togglePointColorSampling() }
+            )
+            toolButton(
+                L10n.string("editor.tool.color_region"),
+                systemImage: "rectangle.dashed",
+                action: {
+                    model.cancelPointColorSampling()
+                    showsColorRegionSampler = true
+                }
             )
 
             Divider().frame(height: 24)
@@ -128,10 +169,16 @@ struct ScreenshotEditorView: View {
     private func toolButton(
         _ title: String,
         systemImage: String,
+        isSelected: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
+                .frame(width: 18, height: 18)
+                .background(
+                    isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
         }
         .help(title)
         .accessibilityLabel(title)
@@ -177,10 +224,26 @@ struct ScreenshotEditorView: View {
                         )
                     }
                 }
+
+                ScreenshotAnalysisOverlay(
+                    project: project,
+                    mapping: mapping,
+                    ocrResult: model.lastOCRResult,
+                    selectedOCRObservationID: model.selectedOCRObservationID,
+                    colorSample: model.lastColorSample,
+                    isPointSampling: model.isPointColorSampling,
+                    isBusy: model.isBusy,
+                    onSelectOCR: { model.selectOCRObservation($0) },
+                    onSamplePoint: { point in
+                        Task { await model.sampleColor(at: point) }
+                    }
+                )
             }
             .contentShape(Rectangle())
             .onTapGesture {
+                guard !model.isPointColorSampling else { return }
                 model.selectEditObject(nil)
+                model.selectOCRObservation(nil)
             }
         }
         .padding(12)
@@ -242,6 +305,9 @@ struct ScreenshotEditorView: View {
                         }
                     }
                 }
+
+                OCRInspectorSection(model: model, project: project)
+                ColorInspectorSection(model: model, project: project)
 
                 if let export = model.lastProjectExport,
                     export.projectID == project.id
@@ -810,7 +876,7 @@ private struct CropEditorSheet: View {
     }
 }
 
-private struct EditorCanvasMapping {
+struct EditorCanvasMapping {
     let visibleBounds: ImagePixelRect
     let imageFrame: CGRect
     let scale: CGFloat
@@ -857,6 +923,16 @@ private struct EditorCanvasMapping {
         )
     }
 
+    func pixelPoint(for viewPoint: CGPoint) -> ImagePixelPoint? {
+        guard imageFrame.contains(viewPoint), scale > 0 else { return nil }
+        let x = visibleBounds.minX + Double((viewPoint.x - imageFrame.minX) / scale)
+        let y = visibleBounds.minY + Double((viewPoint.y - imageFrame.minY) / scale)
+        return ImagePixelPoint(
+            x: min(max(x, visibleBounds.minX), visibleBounds.maxX.nextDown),
+            y: min(max(y, visibleBounds.minY), visibleBounds.maxY.nextDown)
+        )
+    }
+
     func pixelDelta(for translation: CGSize) -> (width: Double, height: Double) {
         guard scale > 0 else { return (0, 0) }
         return (
@@ -874,7 +950,7 @@ extension ImagePreview {
 }
 
 extension Color {
-    fileprivate init(rgba: RGBAColor) {
+    init(rgba: RGBAColor) {
         self.init(
             .sRGB,
             red: rgba.red,
@@ -884,7 +960,7 @@ extension Color {
         )
     }
 
-    fileprivate var rgba: RGBAColor {
+    var rgba: RGBAColor {
         let color = NSColor(self).usingColorSpace(.sRGB) ?? NSColor(self)
         return RGBAColor(
             red: Double(color.redComponent),

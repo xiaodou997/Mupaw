@@ -29,7 +29,10 @@ public struct AgentRPCClient: Sendable {
             method: method,
             parameters: try JSONValue.wrapping(payload)
         )
-        let timeout = timeout
+        let timeout =
+            method == .projectOCR
+            ? max(timeout, MupawConstants.ocrRPCTimeoutSeconds)
+            : timeout
         let descriptor = descriptor
 
         let response = try await Task.detached(priority: .userInitiated) {

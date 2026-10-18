@@ -29,6 +29,8 @@ EXPECTED_TOOLS = {
     "mupaw_project_history",
     "mupaw_project_preview",
     "mupaw_project_export",
+    "mupaw_project_ocr",
+    "mupaw_project_color_sample",
 }
 
 
@@ -85,6 +87,7 @@ def call_tool(
     request_id: int,
     name: str,
     arguments: dict[str, Any] | None = None,
+    timeout: float = 35.0,
 ) -> dict[str, Any]:
     write_message(
         process,
@@ -95,7 +98,7 @@ def call_tool(
             "params": {"name": name, "arguments": arguments or {}},
         },
     )
-    return result_for(read_message(process), request_id)
+    return result_for(read_message(process, timeout=timeout), request_id)
 
 
 def text_content(tool_result: dict[str, Any], tool_name: str) -> str:
@@ -544,6 +547,57 @@ def run(
             raise SmokeFailure("mupaw_project_apply_edits schema omitted M1b properties")
         tool_schema_check["m1bApplyEditProperties"] = sorted(required_edit_properties)
 
+        ocr_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict) and item.get("name") == "mupaw_project_ocr"
+            ),
+            None,
+        )
+        ocr_schema = ocr_tool.get("inputSchema") if isinstance(ocr_tool, dict) else None
+        ocr_properties = ocr_schema.get("properties") if isinstance(ocr_schema, dict) else None
+        required_ocr_properties = {
+            "project_id",
+            "expected_revision",
+            "region",
+            "recognition_level",
+            "recognition_languages",
+            "uses_language_correction",
+            "minimum_confidence",
+        }
+        if not isinstance(ocr_properties, dict) or not required_ocr_properties.issubset(
+            ocr_properties
+        ):
+            raise SmokeFailure("mupaw_project_ocr schema omitted M1c OCR properties")
+        tool_schema_check["m1cOCRProperties"] = sorted(required_ocr_properties)
+
+        color_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict)
+                and item.get("name") == "mupaw_project_color_sample"
+            ),
+            None,
+        )
+        color_schema = color_tool.get("inputSchema") if isinstance(color_tool, dict) else None
+        color_properties = (
+            color_schema.get("properties") if isinstance(color_schema, dict) else None
+        )
+        required_color_properties = {
+            "project_id",
+            "expected_revision",
+            "mode",
+            "point",
+            "region",
+        }
+        if not isinstance(color_properties, dict) or not required_color_properties.issubset(
+            color_properties
+        ):
+            raise SmokeFailure("mupaw_project_color_sample schema omitted M1c color properties")
+        tool_schema_check["m1cColorProperties"] = sorted(required_color_properties)
+
         status = parse_status(call_tool(process, 3, "mupaw_app_status"))
         if require_running and not status["running"]:
             raise SmokeFailure(
@@ -575,6 +629,8 @@ def run(
                 "agent-mcp",
                 "region-capture",
                 "screenshot-editing",
+                "ocr",
+                "color-sampling",
             }
             missing_available = expected_available - available_ids
             if missing_available:

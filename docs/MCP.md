@@ -1,6 +1,6 @@
-# Mupaw MCP contract — M0 through M1b
+# Mupaw MCP contract — M0 through M1c
 
-The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards all capture and editing work to a running `Mupaw.app` instance. The helper never requests screen permission, captures independently, reads arbitrary source files, or drives Mupaw's UI.
+The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards capture, editing, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures independently, reads arbitrary source files, or drives Mupaw's UI.
 
 ## Discovery and capture tools
 
@@ -10,7 +10,7 @@ Returns whether the app responds, app and protocol versions, process ID, and rel
 
 ### `mupaw_capabilities_get`
 
-Returns the implemented and planned capability matrix. M1b reports `source-enumeration`, `screenshot`, `region-capture`, `screenshot-editing`, and `agent-mcp` as available.
+Returns the implemented and planned capability matrix. M1c reports `source-enumeration`, `screenshot`, `region-capture`, `screenshot-editing`, `ocr`, `color-sampling`, and `agent-mcp` as available.
 
 ### `mupaw_sources_list`
 
@@ -56,7 +56,7 @@ Creates a non-destructive project from a completed Mupaw capture.
 
 The source must resolve inside Mupaw's `Captures` directory. The app recomputes SHA-256, verifies image dimensions, copies the source to `Projects/<project-id>/original.png`, and writes an owner-only project document. The original remains unchanged by later edits.
 
-Project get, preview, and export verify that the copied original still matches its recorded SHA-256 and dimensions.
+Project get, OCR, color sampling, preview, and export verify that the copied original still matches its recorded SHA-256 and dimensions.
 
 ### `mupaw_project_get`
 
@@ -161,6 +161,64 @@ A batch either validates and persists completely as one new revision, or leaves 
 
 Renders the project through the same renderer used for export. Returns output dimensions, revision, bounded JPEG preview metadata, and one MCP image content block. `expected_revision` is optional but recommended.
 
+### `mupaw_project_ocr`
+
+Runs Apple Vision OCR locally against the immutable copied original. Vision executes in Mupaw's signed, short-lived local OCR helper with a 120-second safety timeout; no image or text leaves the machine. The current project crop is used when `region` is omitted; rendered arrows, text annotations, and mosaic do not become OCR input.
+
+```json
+{
+  "project_id": "project-uuid",
+  "expected_revision": 5,
+  "region": {"x": 40, "y": 30, "width": 1200, "height": 720},
+  "recognition_level": "accurate",
+  "recognition_languages": ["en-US", "zh-Hans"],
+  "uses_language_correction": true,
+  "minimum_confidence": 0.25
+}
+```
+
+Only `project_id` is required. `expected_revision` is optional but recommended. Omitting `recognition_languages` or passing an empty array enables automatic language detection. At most eight short BCP-47-style language hints are accepted. `minimum_confidence` must be between 0 and 1.
+
+The result includes:
+
+- `projectID`, unchanged `projectRevision`, and `source: "original"`;
+- the integral `analyzedRegion` in original-image pixels with a top-left origin;
+- requested recognition settings plus `recognitionEngine` (`vision_fast` or `vision_accurate`), `effectiveRecognitionLanguages`, and result-level `detectedLanguages`;
+- ordered `observations`, each with bounded text, confidence, a BCP-47-style detected `language` (`und` when uncertain), and an original-image pixel `boundingBox`;
+- `fullText`, equal to observation text joined with newlines.
+
+Results are bounded to 512 observations, 4,096 UTF-8 bytes per observation, and 256 KiB of combined text. Large source regions are scaled to a maximum OCR input dimension of 4,096 pixels while returned coordinates remain in original-image pixels. Language identification uses Natural Language only for sufficiently long or non-ASCII text at a configured confidence threshold and reports `und` rather than inventing a low-confidence language. A cold OCR request may take longer than ordinary RPC calls, so the local client uses a dedicated 150-second OCR response timeout. OCR is read-only and never advances the project revision.
+
+### `mupaw_project_color_sample`
+
+Samples normalized sRGB from the immutable copied original. Coordinates use original-image pixels with a top-left origin.
+
+Point mode:
+
+```json
+{
+  "project_id": "project-uuid",
+  "expected_revision": 5,
+  "mode": "point",
+  "point": {"x": 320, "y": 180}
+}
+```
+
+Region mode:
+
+```json
+{
+  "project_id": "project-uuid",
+  "expected_revision": 5,
+  "mode": "region",
+  "region": {"x": 100, "y": 80, "width": 640, "height": 360}
+}
+```
+
+Point mode requires exactly one in-bounds point and no region. It returns one `primaryColor` and `sampledPixelCount: 1`. Region mode accepts an explicit region or, when omitted, defaults to the current project crop/full image. It returns `primaryColor` equal to `averageColor`, plus `centerColor`, a deterministic quantized `dominantColor`, and the actual bounded `sampledPixelCount`.
+
+Each sampled color includes normalized `rgba`, uppercase `hexRGB` and `hexRGBA`, WCAG-style relative luminance, and `isDark`. Region sampling is bounded to at most 256 pixels on either axis and at most 65,536 sampled pixels. Color sampling is read-only and never advances the project revision.
+
 ### `mupaw_project_export`
 
 ```json
@@ -187,9 +245,11 @@ Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project rev
 - `invalid_edit`: correct malformed coordinates, colors, object IDs, text, limits, or command combinations;
 - `history_unavailable`: no undo or redo state exists;
 - `export_failed`: no completed export is claimed;
+- `ocr_failed`: the available local OCR engines or OCR input preparation failed; no partial result is claimed;
+- `color_sampling_failed`: color input preparation or sRGB sampling failed;
 - `invalid_request`, `unknown_method`, `protocol_mismatch`, `unauthorized`, `frame_too_large`, `capture_failed`, and `internal_error` retain their M0/M1a meanings.
 
-MCP failures use `isError: true` text content and preserve the stable internal error code in the message. A result is successful only after the requested capture, project mutation, preview, or export has completed.
+MCP failures use `isError: true` text content and preserve the stable internal error code in the message. Invalid OCR/color inputs return `invalid_request`; stale expected revisions return `project_version_conflict`. A result is successful only after the requested capture, project mutation, analysis, preview, or export has completed.
 
 ## Validation commands
 
@@ -198,10 +258,13 @@ make mcp-smoke-running
 make mcp-negative-smoke
 make mcp-smoke-capture
 make m1b-smoke
+make m1c-smoke
 make rpc-negative-smoke
-make m1b-acceptance
+make m1c-acceptance
 ```
 
 `make m1b-smoke` performs a real capture, project creation, atomic crop/arrow/text/mosaic batches, update/delete/add, stale-revision and invalid-edit checks, undo, redo, reset, restore, preview, export, file/hash/dimension validation, and original-image immutability verification.
+
+`make m1c-smoke` performs a real Mupaw-window capture, project creation, local OCR with engine/language reporting, point and region color sampling, result-bound/coordinate/color validation, invalid-input and stale-revision checks, and proof that analysis does not change the project revision, project document, or copied original.
 
 `make mcp-smoke-full-screen` remains separate because it records the current display. Cover the display with non-sensitive test content first. For UI/MCP capture ownership, start interactive region selection and run `make mcp-capture-conflict-smoke`.

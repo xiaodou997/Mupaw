@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, capture, versioned screenshot projects, structured edits, preview, history, and PNG export to a local Agent."
+                        "Exposes status, capture, versioned screenshot projects, structured edits, OCR, color sampling, preview, history, and PNG export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -42,11 +42,24 @@ public enum CapabilityCatalog {
                         "Creates versioned projects with crop, arrow, text, mosaic, persisted undo/redo, shared rendering, preview, and PNG export."
                 ),
                 .init(
-                    id: "ocr-color-style",
-                    title: "OCR, color sampling, and visual styling",
-                    availability: .planned,
+                    id: "ocr",
+                    title: "Local screenshot OCR",
+                    availability: .available,
                     detail:
-                        "OCR, color sampling, background, rounded-corner, and shadow styling remain planned for later M1–M2 batches."
+                        "Recognizes text locally with Apple Vision, returning engine metadata, confidence, detected language, and original-image pixel coordinates."
+                ),
+                .init(
+                    id: "color-sampling",
+                    title: "Point and region color sampling",
+                    availability: .available,
+                    detail:
+                        "Samples original screenshot pixels at a point or summarizes a region with average, center, and dominant sRGB colors."
+                ),
+                .init(
+                    id: "visual-style",
+                    title: "Background, rounded-corner, and shadow styling",
+                    availability: .planned,
+                    detail: "Visual styling remains planned for M2."
                 ),
                 .init(
                     id: "scrolling-capture",

@@ -13,6 +13,8 @@ public enum AgentRPCMethod: String, Codable, Sendable, CaseIterable {
     case projectHistory = "project_history"
     case projectPreview = "project_preview"
     case projectExport = "project_export"
+    case projectOCR = "project_ocr"
+    case projectColorSample = "project_color_sample"
 }
 
 public struct AgentRPCRequest: Codable, Sendable, Equatable {
@@ -55,6 +57,8 @@ public enum AgentRPCErrorCode: String, Codable, Sendable {
     case invalidEdit = "invalid_edit"
     case historyUnavailable = "history_unavailable"
     case exportFailed = "export_failed"
+    case ocrFailed = "ocr_failed"
+    case colorSamplingFailed = "color_sampling_failed"
     case frameTooLarge = "frame_too_large"
     case internalError = "internal_error"
 }

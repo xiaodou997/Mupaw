@@ -48,6 +48,10 @@ final class AppModel {
     private(set) var activeProject: ScreenshotProjectState?
     private(set) var activeProjectPreview: ProjectPreviewResult?
     private(set) var lastProjectExport: ProjectExportArtifact?
+    private(set) var lastOCRResult: ProjectOCRResult?
+    private(set) var lastColorSample: ProjectColorSampleResult?
+    var selectedOCRObservationID: String?
+    private(set) var isPointColorSampling = false
     var selectedEditObjectID: String?
     private(set) var rpcStatus = L10n.string("rpc.not_started")
     private(set) var isBusy = false
@@ -71,6 +75,11 @@ final class AppModel {
         return activeProject?.content.objects.first(where: { $0.id == selectedEditObjectID })
     }
 
+    var selectedOCRObservation: OCRTextObservation? {
+        guard let selectedOCRObservationID else { return nil }
+        return lastOCRResult?.observations.first(where: { $0.id == selectedOCRObservationID })
+    }
+
     private let paths: MupawPaths
     private let captureService: CaptureService
     private let projectService: ScreenshotProjectService
@@ -87,7 +96,10 @@ final class AppModel {
             let paths = try MupawPaths.live()
             self.paths = paths
             self.captureService = CaptureService(paths: paths)
-            self.projectService = ScreenshotProjectService(paths: paths)
+            self.projectService = ScreenshotProjectService(
+                paths: paths,
+                textRecognizer: IsolatedVisionScreenshotTextRecognizer()
+            )
         } catch {
             let fallback = MupawPaths(
                 rootDirectory: FileManager.default.temporaryDirectory
@@ -95,7 +107,10 @@ final class AppModel {
             )
             self.paths = fallback
             self.captureService = CaptureService(paths: fallback)
-            self.projectService = ScreenshotProjectService(paths: fallback)
+            self.projectService = ScreenshotProjectService(
+                paths: fallback,
+                textRecognizer: IsolatedVisionScreenshotTextRecognizer()
+            )
             self.errorMessage = L10n.format(
                 "error.app_support_fallback.format",
                 error.localizedDescription
@@ -285,6 +300,110 @@ final class AppModel {
         }
     }
 
+    func runOCR() async {
+        guard let project = activeProject, !isBusy else { return }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            let result = try await projectService.recognizeText(
+                ProjectOCRRequest(
+                    projectID: project.id,
+                    expectedRevision: project.revision,
+                    recognitionLevel: .accurate,
+                    usesLanguageCorrection: true
+                )
+            )
+            lastOCRResult = result
+            selectedOCRObservationID = result.observations.first?.id
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    func clearOCRResult() {
+        lastOCRResult = nil
+        selectedOCRObservationID = nil
+    }
+
+    func selectOCRObservation(_ observationID: String?) {
+        selectedOCRObservationID = observationID
+    }
+
+    func copyOCRTextToPasteboard() {
+        guard let text = lastOCRResult?.fullText, !text.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    func copyOCRObservationToPasteboard(_ observationID: String) {
+        guard let text = lastOCRResult?.observations.first(where: { $0.id == observationID })?.text,
+            !text.isEmpty
+        else {
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    func togglePointColorSampling() {
+        isPointColorSampling.toggle()
+        if isPointColorSampling {
+            selectedEditObjectID = nil
+        }
+    }
+
+    func cancelPointColorSampling() {
+        isPointColorSampling = false
+    }
+
+    func sampleColor(at point: ImagePixelPoint) async {
+        guard let project = activeProject, !isBusy else { return }
+        isPointColorSampling = false
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            lastColorSample = try await projectService.sampleColor(
+                ProjectColorSampleRequest(
+                    projectID: project.id,
+                    expectedRevision: project.revision,
+                    mode: .point,
+                    point: point
+                )
+            )
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    func sampleColor(in region: ImagePixelRect) async {
+        guard let project = activeProject, !isBusy else { return }
+        isPointColorSampling = false
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            lastColorSample = try await projectService.sampleColor(
+                ProjectColorSampleRequest(
+                    projectID: project.id,
+                    expectedRevision: project.revision,
+                    mode: .region,
+                    region: region
+                )
+            )
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    func clearColorSample() {
+        lastColorSample = nil
+        isPointColorSampling = false
+    }
+
     func retryGlobalHotKeys() {
         hotKeyRegistrations = hotKeyManager?.start() ?? []
     }
@@ -335,6 +454,7 @@ final class AppModel {
         )
         activeProject = state
         selectedEditObjectID = nil
+        clearAnalysisState()
         activeProjectPreview = try await projectService.previewProject(
             ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
         )
@@ -358,6 +478,7 @@ final class AppModel {
             )
             activeProject = state
             selectedEditObjectID = selectAfter
+            clearAnalysisState()
             activeProjectPreview = try await projectService.previewProject(
                 ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
             )
@@ -380,6 +501,7 @@ final class AppModel {
                 )
             )
             activeProject = state
+            clearAnalysisState()
             if let selectedEditObjectID,
                 !state.content.objects.contains(where: { $0.id == selectedEditObjectID })
             {
@@ -395,7 +517,11 @@ final class AppModel {
 
     private func syncActiveProject(_ state: ScreenshotProjectState) async {
         guard activeProject?.id == state.id || activeProject == nil else { return }
+        let previousIdentity = activeProject.map { ($0.id, $0.revision) }
         activeProject = state
+        if previousIdentity?.0 != state.id || previousIdentity?.1 != state.revision {
+            clearAnalysisState()
+        }
         if let selectedEditObjectID,
             !state.content.objects.contains(where: { $0.id == selectedEditObjectID })
         {
@@ -404,6 +530,13 @@ final class AppModel {
         activeProjectPreview = try? await projectService.previewProject(
             ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
         )
+    }
+
+    private func clearAnalysisState() {
+        lastOCRResult = nil
+        lastColorSample = nil
+        selectedOCRObservationID = nil
+        isPointColorSampling = false
     }
 
     private func captureInteractiveRegionArtifact() async throws -> ScreenshotArtifact {
@@ -644,6 +777,16 @@ final class AppModel {
         case .invalidSourceURL, .sourceOutsideCaptureDirectory, .invalidProjectID,
             .invalidProjectData, .unsupportedImage, .canvasTooLarge, .invalidEdit:
             return .failure(id: requestID, code: .invalidEdit, message: error.localizedDescription)
+        case .invalidAnalysis:
+            return .failure(id: requestID, code: .invalidRequest, message: error.localizedDescription)
+        case .ocrFailed:
+            return .failure(id: requestID, code: .ocrFailed, message: error.localizedDescription)
+        case .colorSamplingFailed:
+            return .failure(
+                id: requestID,
+                code: .colorSamplingFailed,
+                message: error.localizedDescription
+            )
         case .renderFailed:
             return .failure(id: requestID, code: .internalError, message: error.localizedDescription)
         case .exportFailed:
@@ -778,6 +921,24 @@ final class AppModel {
                 let exportRequest = try request.parameters.decode(ProjectExportRequest.self)
                 let result = try await projectService.exportProject(exportRequest)
                 lastProjectExport = result
+                return try .success(id: request.id, value: result)
+
+            case .projectOCR:
+                let ocrRequest = try request.parameters.decode(ProjectOCRRequest.self)
+                let result = try await projectService.recognizeText(ocrRequest)
+                if activeProject?.id == result.projectID {
+                    lastOCRResult = result
+                    selectedOCRObservationID = result.observations.first?.id
+                }
+                return try .success(id: request.id, value: result)
+
+            case .projectColorSample:
+                let colorRequest = try request.parameters.decode(ProjectColorSampleRequest.self)
+                let result = try await projectService.sampleColor(colorRequest)
+                if activeProject?.id == result.projectID {
+                    lastColorSample = result
+                    isPointColorSampling = false
+                }
                 return try .success(id: request.id, value: result)
             }
         } catch let error as ScreenshotProjectServiceError {

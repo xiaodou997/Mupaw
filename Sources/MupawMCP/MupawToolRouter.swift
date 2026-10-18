@@ -52,6 +52,12 @@ internal struct MupawToolRouter: Sendable {
             case "mupaw_project_export":
                 return try await projectExport(arguments: arguments)
 
+            case "mupaw_project_ocr":
+                return try await projectOCR(arguments: arguments)
+
+            case "mupaw_project_color_sample":
+                return try await projectColorSample(arguments: arguments)
+
             default:
                 return failure("Unknown Mupaw tool: \(name)")
             }
@@ -220,6 +226,26 @@ internal struct MupawToolRouter: Sendable {
             responseType: ProjectExportArtifact.self
         )
         return successWithPreview(result, preview: result.preview)
+    }
+
+    private func projectOCR(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectOCRRequest = try decodeArguments(arguments)
+        let result: ProjectOCRResult = try await call(
+            method: .projectOCR,
+            payload: request,
+            responseType: ProjectOCRResult.self
+        )
+        return success(result)
+    }
+
+    private func projectColorSample(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectColorSampleRequest = try decodeArguments(arguments)
+        let result: ProjectColorSampleResult = try await call(
+            method: .projectColorSample,
+            payload: request,
+            responseType: ProjectColorSampleResult.self
+        )
+        return success(result)
     }
 
     private func decodeArguments<T: Decodable>(_ arguments: [String: Value]?) throws -> T {

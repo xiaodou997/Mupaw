@@ -16,6 +16,9 @@ public enum ScreenshotProjectServiceError: Error, LocalizedError, Sendable, Equa
     case historyUnavailable(ProjectHistoryAction)
     case renderFailed(String)
     case exportFailed(String)
+    case invalidAnalysis(String)
+    case ocrFailed(String)
+    case colorSamplingFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -101,6 +104,24 @@ public enum ScreenshotProjectServiceError: Error, LocalizedError, Sendable, Equa
                 fallback: "The project could not be exported: %@",
                 message
             )
+        case .invalidAnalysis(let message):
+            return EditingL10n.format(
+                "analysis.error.invalid_analysis.format",
+                fallback: "The analysis request is invalid: %@",
+                message
+            )
+        case .ocrFailed(let message):
+            return EditingL10n.format(
+                "analysis.error.ocr_failed.format",
+                fallback: "OCR failed: %@",
+                message
+            )
+        case .colorSamplingFailed(let message):
+            return EditingL10n.format(
+                "analysis.error.color_sampling_failed.format",
+                fallback: "Color sampling failed: %@",
+                message
+            )
         }
     }
 }
@@ -109,10 +130,22 @@ public actor ScreenshotProjectService {
     private let paths: MupawPaths
     private let store: ScreenshotProjectStore
     private let renderer = ScreenshotRenderer()
+    private let analyzer: ScreenshotAnalyzer
 
     public init(paths: MupawPaths, fileManager: FileManager = .default) {
         self.paths = paths
         self.store = ScreenshotProjectStore(paths: paths, fileManager: fileManager)
+        self.analyzer = ScreenshotAnalyzer()
+    }
+
+    public init(
+        paths: MupawPaths,
+        fileManager: FileManager = .default,
+        textRecognizer: any ScreenshotTextRecognizing
+    ) {
+        self.paths = paths
+        self.store = ScreenshotProjectStore(paths: paths, fileManager: fileManager)
+        self.analyzer = ScreenshotAnalyzer(textRecognizer: textRecognizer)
     }
 
     public func createProject(_ request: ProjectCreateRequest) throws -> ScreenshotProjectState {
@@ -234,6 +267,38 @@ public actor ScreenshotProjectService {
         } catch {
             throw ScreenshotProjectServiceError.exportFailed(error.localizedDescription)
         }
+    }
+
+    public func recognizeText(_ request: ProjectOCRRequest) async throws -> ProjectOCRResult {
+        let record = try store.load(
+            projectID: request.projectID,
+            verifyOriginal: true
+        )
+        if let expectedRevision = request.expectedRevision {
+            try verifyRevision(expectedRevision, record: record)
+        }
+        return try await analyzer.recognizeText(
+            record: record,
+            originalURL: store.originalURL(for: record),
+            request: request
+        )
+    }
+
+    public func sampleColor(
+        _ request: ProjectColorSampleRequest
+    ) throws -> ProjectColorSampleResult {
+        let record = try store.load(
+            projectID: request.projectID,
+            verifyOriginal: true
+        )
+        if let expectedRevision = request.expectedRevision {
+            try verifyRevision(expectedRevision, record: record)
+        }
+        return try analyzer.sampleColor(
+            record: record,
+            originalURL: store.originalURL(for: record),
+            request: request
+        )
     }
 
     private func verifyRevision(_ expected: Int, record: StoredScreenshotProject) throws {

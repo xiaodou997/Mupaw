@@ -185,6 +185,67 @@ internal enum MupawToolCatalog {
             inputSchema: projectRevisionSchema
         ),
         Tool(
+            name: "mupaw_project_ocr",
+            description:
+                "Recognize text locally from the immutable project original using Apple Vision. Returns effective recognition settings, detected-language metadata, and bounded observations with text, confidence, language, and original-image pixel rectangles using a top-left origin. The current crop is the default region; annotations are not analyzed.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "project_id": projectIDProperty,
+                    "expected_revision": revisionProperty,
+                    "region": rectSchema,
+                    "recognition_level": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("fast"), .string("accurate")]),
+                        "default": .string("accurate"),
+                    ]),
+                    "recognition_languages": .object([
+                        "type": .string("array"),
+                        "maxItems": .int(8),
+                        "items": .object([
+                            "type": .string("string"),
+                            "maxLength": .int(64),
+                        ]),
+                        "description": .string(
+                            "Optional BCP-47 language hints such as en-US or zh-Hans. Omit or use an empty array for automatic language detection."
+                        ),
+                    ]),
+                    "uses_language_correction": .object([
+                        "type": .string("boolean"),
+                        "default": .bool(true),
+                    ]),
+                    "minimum_confidence": .object([
+                        "type": .string("number"),
+                        "minimum": .int(0),
+                        "maximum": .int(1),
+                        "default": .int(0),
+                    ]),
+                ]),
+                "required": .array([.string("project_id")]),
+                "additionalProperties": .bool(false),
+            ])
+        ),
+        Tool(
+            name: "mupaw_project_color_sample",
+            description:
+                "Sample sRGB color from the immutable project original. point mode returns one pixel. region mode returns average, center, and deterministic dominant colors plus the bounded sampled-pixel count. Coordinates use original-image pixels with a top-left origin.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "project_id": projectIDProperty,
+                    "expected_revision": revisionProperty,
+                    "mode": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("point"), .string("region")]),
+                    ]),
+                    "point": pointSchema,
+                    "region": rectSchema,
+                ]),
+                "required": .array([.string("project_id"), .string("mode")]),
+                "additionalProperties": .bool(false),
+            ])
+        ),
+        Tool(
             name: "mupaw_project_export",
             description:
                 "Render and export the current screenshot project as PNG while preserving the original capture and editable project. Returns file metadata, SHA-256, and preview.",

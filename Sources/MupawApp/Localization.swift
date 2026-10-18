@@ -47,6 +47,22 @@ enum L10n {
         }
     }
 
+    static func ocrEngine(_ engine: OCRRecognitionEngine) -> String {
+        switch engine {
+        case .visionFast:
+            return string("editor.ocr.engine.vision_fast")
+        case .visionAccurate:
+            return string("editor.ocr.engine.vision_accurate")
+        }
+    }
+
+    static func ocrLanguage(_ identifier: String) -> String {
+        guard identifier != "und" else {
+            return string("editor.ocr.language.undetermined")
+        }
+        return Locale.current.localizedString(forLanguageCode: identifier) ?? identifier
+    }
+
     static func editKind(_ kind: ScreenshotEditKind) -> String {
         switch kind {
         case .arrow:

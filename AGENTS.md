@@ -35,6 +35,14 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 - Keep project and export files owner-only. Project creation must verify that the source belongs to Mupaw's capture directory and that its SHA-256 matches.
 - Prefer deterministic Core Graphics CPU rendering for the editing foundation. Introduce GPU/Core Image paths only with a real-device crash and output-equivalence gate.
 
+## Screenshot analysis rules
+
+- OCR and color sampling operate on the immutable copied original. The current crop is only the default analysis region; annotations must not silently alter analysis input.
+- OCR results return bounded text observations, confidence, detected language (`und` when uncertain), and original-image pixel rectangles with a top-left origin.
+- Point and region color sampling convert to sRGB and remain deterministic and allocation-bounded. Region sampling must report the sampling resolution/count.
+- UI and MCP analysis must call the same project service. Agents provide structured points and rectangles and never simulate clicks in the editor.
+- Analysis is read-only and must never advance the project revision or mutate the original, project document, or edit history.
+
 ## Localization rules
 
 - English and Simplified Chinese are required from the first version.
