@@ -23,6 +23,18 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 - Full-screen and region capture should exclude Mupaw's own UI by default; independent window capture targets the exact returned window ID.
 - Cancelling an interactive selection is not a capture failure and must not create an artifact.
 
+## Screenshot project rules
+
+- Original captures are immutable project inputs. Copy them into the project directory and store edits separately.
+- Project coordinates use original-image pixels with a top-left origin; crop does not rewrite object coordinates.
+- Every mutation must require the caller's expected revision and create a new monotonic revision.
+- Persist bounded undo and redo stacks. A new edit after undo clears redo history.
+- UI preview, MCP preview, and PNG export must call one shared renderer. Do not maintain visually divergent preview and export implementations.
+- Agent edits are structured domain commands. Never drive the editor with simulated clicks or pointer movement.
+- Validate every rectangle, point, color, text length, line width, font size, mosaic block size, object count, canvas allocation, and project identifier before persistence or rendering.
+- Keep project and export files owner-only. Project creation must verify that the source belongs to Mupaw's capture directory and that its SHA-256 matches.
+- Prefer deterministic Core Graphics CPU rendering for the editing foundation. Introduce GPU/Core Image paths only with a real-device crash and output-equivalence gate.
+
 ## Localization rules
 
 - English and Simplified Chinese are required from the first version.

@@ -3,11 +3,15 @@ import Foundation
 public struct MupawPaths: Sendable, Equatable {
     public let rootDirectory: URL
     public let capturesDirectory: URL
+    public let projectsDirectory: URL
+    public let exportsDirectory: URL
     public let connectionDescriptorURL: URL
 
     public init(rootDirectory: URL) {
         self.rootDirectory = rootDirectory
         self.capturesDirectory = rootDirectory.appendingPathComponent("Captures", isDirectory: true)
+        self.projectsDirectory = rootDirectory.appendingPathComponent("Projects", isDirectory: true)
+        self.exportsDirectory = rootDirectory.appendingPathComponent("Exports", isDirectory: true)
         self.connectionDescriptorURL = rootDirectory.appendingPathComponent("agent-connection.json")
     }
 
@@ -22,15 +26,22 @@ public struct MupawPaths: Sendable, Equatable {
     }
 
     public func prepare(fileManager: FileManager = .default) throws {
-        try fileManager.createDirectory(
-            at: rootDirectory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try fileManager.createDirectory(
-            at: capturesDirectory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
+        let directories = [
+            rootDirectory,
+            capturesDirectory,
+            projectsDirectory,
+            exportsDirectory,
+        ]
+        for directory in directories {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+        }
     }
 }

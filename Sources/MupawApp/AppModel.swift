@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import MupawCapture
 import MupawCore
+import MupawEditing
 import Observation
 
 private enum AppCaptureError: Error, LocalizedError {
@@ -44,6 +45,10 @@ final class AppModel {
     var selectedSourceID: String?
     var includeCursor = false
     private(set) var lastArtifact: ScreenshotArtifact?
+    private(set) var activeProject: ScreenshotProjectState?
+    private(set) var activeProjectPreview: ProjectPreviewResult?
+    private(set) var lastProjectExport: ProjectExportArtifact?
+    var selectedEditObjectID: String?
     private(set) var rpcStatus = L10n.string("rpc.not_started")
     private(set) var isBusy = false
     private(set) var isSelectingRegion = false
@@ -61,8 +66,14 @@ final class AppModel {
         }
     }
 
+    var selectedEditObject: ScreenshotEditObject? {
+        guard let selectedEditObjectID else { return nil }
+        return activeProject?.content.objects.first(where: { $0.id == selectedEditObjectID })
+    }
+
     private let paths: MupawPaths
     private let captureService: CaptureService
+    private let projectService: ScreenshotProjectService
     private let permissionService = PermissionService()
     private let regionSelectionController = RegionSelectionController()
     private var rpcServer: AgentRPCServer?
@@ -76,6 +87,7 @@ final class AppModel {
             let paths = try MupawPaths.live()
             self.paths = paths
             self.captureService = CaptureService(paths: paths)
+            self.projectService = ScreenshotProjectService(paths: paths)
         } catch {
             let fallback = MupawPaths(
                 rootDirectory: FileManager.default.temporaryDirectory
@@ -83,6 +95,7 @@ final class AppModel {
             )
             self.paths = fallback
             self.captureService = CaptureService(paths: fallback)
+            self.projectService = ScreenshotProjectService(paths: fallback)
             self.errorMessage = L10n.format(
                 "error.app_support_fallback.format",
                 error.localizedDescription
@@ -179,6 +192,99 @@ final class AppModel {
         }
     }
 
+    func selectEditObject(_ objectID: String?) {
+        selectedEditObjectID = objectID
+    }
+
+    func addArrowEdit() async {
+        guard let project = activeProject else { return }
+        let visible = project.visibleBounds
+        let arrow = ArrowEdit(
+            start: ImagePixelPoint(
+                x: visible.minX + visible.width * 0.20,
+                y: visible.minY + visible.height * 0.42
+            ),
+            end: ImagePixelPoint(
+                x: visible.minX + visible.width * 0.80,
+                y: visible.minY + visible.height * 0.58
+            )
+        )
+        await applyActiveProjectCommands([.addObject(.arrow(arrow))], selectAfter: arrow.id)
+    }
+
+    func addTextEdit() async {
+        guard let project = activeProject else { return }
+        let visible = project.visibleBounds
+        let frame = ImagePixelRect(
+            x: visible.minX + visible.width * 0.22,
+            y: visible.minY + visible.height * 0.36,
+            width: max(80, visible.width * 0.56),
+            height: max(36, visible.height * 0.16)
+        ).clamped(to: project.originalBounds, minimumSize: MupawConstants.minimumEditorObjectSize)
+        let text = TextEdit(
+            frame: frame,
+            text: L10n.string("editor.default_text"),
+            fontSize: min(64, max(18, visible.height * 0.08))
+        )
+        await applyActiveProjectCommands([.addObject(.text(text))], selectAfter: text.id)
+    }
+
+    func addMosaicEdit() async {
+        guard let project = activeProject else { return }
+        let visible = project.visibleBounds
+        let frame = ImagePixelRect(
+            x: visible.minX + visible.width * 0.34,
+            y: visible.minY + visible.height * 0.35,
+            width: max(60, visible.width * 0.32),
+            height: max(40, visible.height * 0.24)
+        ).clamped(to: project.originalBounds, minimumSize: MupawConstants.minimumEditorObjectSize)
+        let mosaic = MosaicEdit(frame: frame, blockSize: 18)
+        await applyActiveProjectCommands([.addObject(.mosaic(mosaic))], selectAfter: mosaic.id)
+    }
+
+    func updateEditObject(_ object: ScreenshotEditObject) async {
+        await applyActiveProjectCommands([.updateObject(object)], selectAfter: object.id)
+    }
+
+    func deleteSelectedEditObject() async {
+        guard let selectedEditObjectID else { return }
+        await applyActiveProjectCommands([.deleteObject(selectedEditObjectID)], selectAfter: nil)
+    }
+
+    func setProjectCrop(_ rect: ImagePixelRect?) async {
+        await applyActiveProjectCommands([.setCrop(rect)], selectAfter: nil)
+    }
+
+    func resetActiveProject() async {
+        await applyActiveProjectCommands([.reset], selectAfter: nil)
+    }
+
+    func undoActiveProject() async {
+        await performActiveProjectHistory(.undo)
+    }
+
+    func redoActiveProject() async {
+        await performActiveProjectHistory(.redo)
+    }
+
+    func exportActiveProject() async {
+        guard let project = activeProject, !isBusy else { return }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            lastProjectExport = try await projectService.exportProject(
+                ProjectExportRequest(
+                    projectID: project.id,
+                    expectedRevision: project.revision,
+                    fileName: project.title
+                )
+            )
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
     func retryGlobalHotKeys() {
         hotKeyRegistrations = hotKeyManager?.start() ?? []
     }
@@ -204,7 +310,9 @@ final class AppModel {
         }
 
         do {
-            lastArtifact = try await operation()
+            let artifact = try await operation()
+            lastArtifact = artifact
+            try await createAndActivateProject(from: artifact)
         } catch let error as RegionSelectionError where error == .cancelled {
             errorMessage = nil
         } catch {
@@ -214,6 +322,88 @@ final class AppModel {
                 await refreshSourceStateAfterCaptureFailure()
             }
         }
+    }
+
+    private func createAndActivateProject(from artifact: ScreenshotArtifact) async throws {
+        let state = try await projectService.createProject(
+            ProjectCreateRequest(
+                sourceFileURL: artifact.fileURL,
+                sourceSHA256: artifact.sha256,
+                sourceArtifactID: artifact.id,
+                title: artifact.source.title
+            )
+        )
+        activeProject = state
+        selectedEditObjectID = nil
+        activeProjectPreview = try await projectService.previewProject(
+            ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
+        )
+    }
+
+    private func applyActiveProjectCommands(
+        _ commands: [ProjectEditCommand],
+        selectAfter: String?
+    ) async {
+        guard let project = activeProject, !isBusy else { return }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            let state = try await projectService.applyEdits(
+                ProjectApplyEditsRequest(
+                    projectID: project.id,
+                    expectedRevision: project.revision,
+                    commands: commands
+                )
+            )
+            activeProject = state
+            selectedEditObjectID = selectAfter
+            activeProjectPreview = try await projectService.previewProject(
+                ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
+            )
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    private func performActiveProjectHistory(_ action: ProjectHistoryAction) async {
+        guard let project = activeProject, !isBusy else { return }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            let state = try await projectService.performHistory(
+                ProjectHistoryRequest(
+                    projectID: project.id,
+                    expectedRevision: project.revision,
+                    action: action
+                )
+            )
+            activeProject = state
+            if let selectedEditObjectID,
+                !state.content.objects.contains(where: { $0.id == selectedEditObjectID })
+            {
+                self.selectedEditObjectID = nil
+            }
+            activeProjectPreview = try await projectService.previewProject(
+                ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
+            )
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    private func syncActiveProject(_ state: ScreenshotProjectState) async {
+        guard activeProject?.id == state.id || activeProject == nil else { return }
+        activeProject = state
+        if let selectedEditObjectID,
+            !state.content.objects.contains(where: { $0.id == selectedEditObjectID })
+        {
+            self.selectedEditObjectID = nil
+        }
+        activeProjectPreview = try? await projectService.previewProject(
+            ProjectPreviewRequest(projectID: state.id, expectedRevision: state.revision)
+        )
     }
 
     private func captureInteractiveRegionArtifact() async throws -> ScreenshotArtifact {
@@ -422,6 +612,47 @@ final class AppModel {
 
     private func rpcFailure(
         requestID: String,
+        error: ScreenshotProjectServiceError
+    ) -> AgentRPCResponse {
+        switch error {
+        case .artifactNotFound:
+            return .failure(id: requestID, code: .artifactNotFound, message: error.localizedDescription)
+        case .artifactHashMismatch:
+            return .failure(
+                id: requestID,
+                code: .artifactHashMismatch,
+                message: error.localizedDescription
+            )
+        case .projectNotFound:
+            return .failure(id: requestID, code: .projectNotFound, message: error.localizedDescription)
+        case .versionConflict(let expected, let actual):
+            return .failure(
+                id: requestID,
+                code: .projectVersionConflict,
+                message: error.localizedDescription,
+                details: .object([
+                    "expected_revision": .integer(expected),
+                    "actual_revision": .integer(actual),
+                ])
+            )
+        case .historyUnavailable:
+            return .failure(
+                id: requestID,
+                code: .historyUnavailable,
+                message: error.localizedDescription
+            )
+        case .invalidSourceURL, .sourceOutsideCaptureDirectory, .invalidProjectID,
+            .invalidProjectData, .unsupportedImage, .canvasTooLarge, .invalidEdit:
+            return .failure(id: requestID, code: .invalidEdit, message: error.localizedDescription)
+        case .renderFailed:
+            return .failure(id: requestID, code: .internalError, message: error.localizedDescription)
+        case .exportFailed:
+            return .failure(id: requestID, code: .exportFailed, message: error.localizedDescription)
+        }
+    }
+
+    private func rpcFailure(
+        requestID: String,
         error: CaptureServiceError
     ) -> AgentRPCResponse {
         switch error {
@@ -514,7 +745,43 @@ final class AppModel {
                 let artifact = try await captureService.capture(captureRequest)
                 lastArtifact = artifact
                 return try .success(id: request.id, value: artifact)
+
+            case .projectCreate:
+                let createRequest = try request.parameters.decode(ProjectCreateRequest.self)
+                let state = try await projectService.createProject(createRequest)
+                await syncActiveProject(state)
+                return try .success(id: request.id, value: state)
+
+            case .projectGet:
+                let getRequest = try request.parameters.decode(ProjectGetRequest.self)
+                let state = try await projectService.getProject(getRequest)
+                return try .success(id: request.id, value: state)
+
+            case .projectApplyEdits:
+                let applyRequest = try request.parameters.decode(ProjectApplyEditsRequest.self)
+                let state = try await projectService.applyEdits(applyRequest)
+                await syncActiveProject(state)
+                return try .success(id: request.id, value: state)
+
+            case .projectHistory:
+                let historyRequest = try request.parameters.decode(ProjectHistoryRequest.self)
+                let state = try await projectService.performHistory(historyRequest)
+                await syncActiveProject(state)
+                return try .success(id: request.id, value: state)
+
+            case .projectPreview:
+                let previewRequest = try request.parameters.decode(ProjectPreviewRequest.self)
+                let result = try await projectService.previewProject(previewRequest)
+                return try .success(id: request.id, value: result)
+
+            case .projectExport:
+                let exportRequest = try request.parameters.decode(ProjectExportRequest.self)
+                let result = try await projectService.exportProject(exportRequest)
+                lastProjectExport = result
+                return try .success(id: request.id, value: result)
             }
+        } catch let error as ScreenshotProjectServiceError {
+            return rpcFailure(requestID: request.id, error: error)
         } catch let error as CaptureServiceError {
             return rpcFailure(requestID: request.id, error: error)
         } catch let error as DecodingError {

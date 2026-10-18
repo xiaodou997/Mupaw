@@ -7,6 +7,12 @@ public enum AgentRPCMethod: String, Codable, Sendable, CaseIterable {
     case permissionsGet = "permissions_get"
     case sourcesList = "sources_list"
     case screenshotCapture = "screenshot_capture"
+    case projectCreate = "project_create"
+    case projectGet = "project_get"
+    case projectApplyEdits = "project_apply_edits"
+    case projectHistory = "project_history"
+    case projectPreview = "project_preview"
+    case projectExport = "project_export"
 }
 
 public struct AgentRPCRequest: Codable, Sendable, Equatable {
@@ -42,6 +48,13 @@ public enum AgentRPCErrorCode: String, Codable, Sendable {
     case invalidRegion = "invalid_region"
     case captureInProgress = "capture_in_progress"
     case captureFailed = "capture_failed"
+    case artifactNotFound = "artifact_not_found"
+    case artifactHashMismatch = "artifact_hash_mismatch"
+    case projectNotFound = "project_not_found"
+    case projectVersionConflict = "project_version_conflict"
+    case invalidEdit = "invalid_edit"
+    case historyUnavailable = "history_unavailable"
+    case exportFailed = "export_failed"
     case frameTooLarge = "frame_too_large"
     case internalError = "internal_error"
 }

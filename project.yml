@@ -45,6 +45,18 @@ targets:
         PRODUCT_MODULE_NAME: MupawCapture
         SKIP_INSTALL: YES
 
+  MupawEditing:
+    type: library.static
+    platform: macOS
+    sources:
+      - Sources/MupawEditing
+    dependencies:
+      - target: MupawCore
+    settings:
+      base:
+        PRODUCT_MODULE_NAME: MupawEditing
+        SKIP_INSTALL: YES
+
   Mupaw:
     type: application
     platform: macOS
@@ -55,6 +67,7 @@ targets:
     dependencies:
       - target: MupawCore
       - target: MupawCapture
+      - target: MupawEditing
     info:
       path: Config/Mupaw-Info.plist
       properties:
@@ -100,6 +113,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.core-tests
         GENERATE_INFOPLIST_FILE: YES
 
+  MupawEditingTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/MupawEditingTests
+    dependencies:
+      - target: MupawCore
+      - target: MupawEditing
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.editing-tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Mupaw:
     build:
@@ -107,10 +133,12 @@ schemes:
         Mupaw: all
         MupawMCP: all
         MupawCoreTests: [test]
+        MupawEditingTests: [test]
     test:
       gatherCoverageData: false
       targets:
         - MupawCoreTests
+        - MupawEditingTests
 
   MupawMCP:
     build:

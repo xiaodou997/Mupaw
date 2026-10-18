@@ -15,7 +15,7 @@ struct MupawApp: App {
                     }
                 }
         }
-        .defaultSize(width: 980, height: 680)
+        .defaultSize(width: 1_260, height: 760)
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
         .windowStyle(.hiddenTitleBar)

@@ -46,4 +46,15 @@ enum L10n {
             return string("capture.mode.region")
         }
     }
+
+    static func editKind(_ kind: ScreenshotEditKind) -> String {
+        switch kind {
+        case .arrow:
+            return string("editor.kind.arrow")
+        case .text:
+            return string("editor.kind.text")
+        case .mosaic:
+            return string("editor.kind.mosaic")
+        }
+    }
 }

@@ -23,6 +23,12 @@ EXPECTED_TOOLS = {
     "mupaw_capabilities_get",
     "mupaw_sources_list",
     "mupaw_screenshot_capture",
+    "mupaw_project_create",
+    "mupaw_project_get",
+    "mupaw_project_apply_edits",
+    "mupaw_project_history",
+    "mupaw_project_preview",
+    "mupaw_project_export",
 }
 
 
@@ -518,6 +524,25 @@ def run(
                 "mupaw_screenshot_capture schema omitted M1a mode/region properties"
             )
         tool_schema_check = {"m1aCaptureProperties": sorted(required_schema_properties)}
+        apply_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict)
+                and item.get("name") == "mupaw_project_apply_edits"
+            ),
+            None,
+        )
+        apply_schema = apply_tool.get("inputSchema") if isinstance(apply_tool, dict) else None
+        apply_properties = (
+            apply_schema.get("properties") if isinstance(apply_schema, dict) else None
+        )
+        required_edit_properties = {"project_id", "expected_revision", "commands"}
+        if not isinstance(apply_properties, dict) or not required_edit_properties.issubset(
+            apply_properties
+        ):
+            raise SmokeFailure("mupaw_project_apply_edits schema omitted M1b properties")
+        tool_schema_check["m1bApplyEditProperties"] = sorted(required_edit_properties)
 
         status = parse_status(call_tool(process, 3, "mupaw_app_status"))
         if require_running and not status["running"]:
@@ -549,6 +574,7 @@ def run(
                 "screenshot",
                 "agent-mcp",
                 "region-capture",
+                "screenshot-editing",
             }
             missing_available = expected_available - available_ids
             if missing_available:

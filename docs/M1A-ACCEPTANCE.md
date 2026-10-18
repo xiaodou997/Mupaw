@@ -2,6 +2,8 @@
 
 M1a is complete only when all criteria below pass on a real macOS 26+ machine. This gate extends M0; it does not claim annotations, OCR, scrolling capture, or recording.
 
+M1a remains the capture-only historical gate. M1b editing is specified separately in [M1B-ACCEPTANCE.md](M1B-ACCEPTANCE.md). Physical cross-display dragging remains a future compatibility check because the current development machine has one display; deterministic mixed-scale planning tests continue to protect the code path.
+
 ## Build, localization, and deterministic models
 
 - `make generate`, `make lint`, `make build`, and `make test` succeed with Swift 6 strict concurrency.

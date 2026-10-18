@@ -34,6 +34,24 @@ internal struct MupawToolRouter: Sendable {
             case "mupaw_screenshot_capture":
                 return try await screenshot(arguments: arguments)
 
+            case "mupaw_project_create":
+                return try await projectCreate(arguments: arguments)
+
+            case "mupaw_project_get":
+                return try await projectGet(arguments: arguments)
+
+            case "mupaw_project_apply_edits":
+                return try await projectApplyEdits(arguments: arguments)
+
+            case "mupaw_project_history":
+                return try await projectHistory(arguments: arguments)
+
+            case "mupaw_project_preview":
+                return try await projectPreview(arguments: arguments)
+
+            case "mupaw_project_export":
+                return try await projectExport(arguments: arguments)
+
             default:
                 return failure("Unknown Mupaw tool: \(name)")
             }
@@ -144,6 +162,78 @@ internal struct MupawToolRouter: Sendable {
         return .init(content: content, isError: false)
     }
 
+    private func projectCreate(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectCreateRequest = try decodeArguments(arguments)
+        let result: ScreenshotProjectState = try await call(
+            method: .projectCreate,
+            payload: request,
+            responseType: ScreenshotProjectState.self
+        )
+        return success(result)
+    }
+
+    private func projectGet(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectGetRequest = try decodeArguments(arguments)
+        let result: ScreenshotProjectState = try await call(
+            method: .projectGet,
+            payload: request,
+            responseType: ScreenshotProjectState.self
+        )
+        return success(result)
+    }
+
+    private func projectApplyEdits(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectApplyEditsRequest = try decodeArguments(arguments)
+        let result: ScreenshotProjectState = try await call(
+            method: .projectApplyEdits,
+            payload: request,
+            responseType: ScreenshotProjectState.self
+        )
+        return success(result)
+    }
+
+    private func projectHistory(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectHistoryRequest = try decodeArguments(arguments)
+        let result: ScreenshotProjectState = try await call(
+            method: .projectHistory,
+            payload: request,
+            responseType: ScreenshotProjectState.self
+        )
+        return success(result)
+    }
+
+    private func projectPreview(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectPreviewRequest = try decodeArguments(arguments)
+        let result: ProjectPreviewResult = try await call(
+            method: .projectPreview,
+            payload: request,
+            responseType: ProjectPreviewResult.self
+        )
+        return successWithPreview(result, preview: result.preview)
+    }
+
+    private func projectExport(arguments: [String: Value]?) async throws -> CallTool.Result {
+        let request: ProjectExportRequest = try decodeArguments(arguments)
+        let result: ProjectExportArtifact = try await call(
+            method: .projectExport,
+            payload: request,
+            responseType: ProjectExportArtifact.self
+        )
+        return successWithPreview(result, preview: result.preview)
+    }
+
+    private func decodeArguments<T: Decodable>(_ arguments: [String: Value]?) throws -> T {
+        do {
+            let data = try JSONEncoder().encode(Value.object(arguments ?? [:]))
+            return try JSONDecoder.mupaw.decode(T.self, from: data)
+        } catch {
+            throw ToolArgumentError(
+                message:
+                    "Mupaw request failed [invalid_request]: Invalid Mupaw tool arguments: \(error.localizedDescription)"
+            )
+        }
+    }
+
     private func parseRegion(_ value: Value?) throws -> CaptureRegion? {
         guard let value else { return nil }
         guard let object = value.objectValue else {
@@ -193,6 +283,28 @@ internal struct MupawToolRouter: Sendable {
         let descriptor = try AgentConnectionDescriptorStore(paths: paths).read()
         let client = AgentRPCClient(descriptor: descriptor)
         return try await client.call(method: method, payload: payload, responseType: responseType)
+    }
+
+    private func successWithPreview<T: Encodable>(
+        _ value: T,
+        preview: ImagePreview
+    ) -> CallTool.Result {
+        do {
+            return .init(
+                content: [
+                    .text(text: try encodedJSON(value), annotations: nil, _meta: nil),
+                    .image(
+                        data: preview.base64Data,
+                        mimeType: preview.mimeType,
+                        annotations: nil,
+                        _meta: nil
+                    ),
+                ],
+                isError: false
+            )
+        } catch {
+            return failure("Could not encode Mupaw result: \(error.localizedDescription)")
+        }
     }
 
     private func success<T: Encodable>(_ value: T) -> CallTool.Result {

@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, capabilities, source discovery, and full-screen/window/structured-region capture to a local Agent."
+                        "Exposes status, capture, versioned screenshot projects, structured edits, preview, history, and PNG export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -35,10 +35,18 @@ public enum CapabilityCatalog {
                         "Provides a native multi-display selection overlay for people and a structured global-display-points rectangle for Agents."
                 ),
                 .init(
-                    id: "annotations-ocr-style",
-                    title: "Annotations, OCR, color sampling, and visual styling",
+                    id: "screenshot-editing",
+                    title: "Non-destructive screenshot editing",
+                    availability: .available,
+                    detail:
+                        "Creates versioned projects with crop, arrow, text, mosaic, persisted undo/redo, shared rendering, preview, and PNG export."
+                ),
+                .init(
+                    id: "ocr-color-style",
+                    title: "OCR, color sampling, and visual styling",
                     availability: .planned,
-                    detail: "Arrows, text, mosaic, crop, OCR, background, and shadow styling are planned for M1–M2."
+                    detail:
+                        "OCR, color sampling, background, rounded-corner, and shadow styling remain planned for later M1–M2 batches."
                 ),
                 .init(
                     id: "scrolling-capture",

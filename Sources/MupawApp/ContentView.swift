@@ -13,12 +13,12 @@ struct ContentView: View {
                 ScrollView {
                     sidebar
                 }
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: 440)
+                .frame(width: 330)
                 detail
-                    .frame(minWidth: 460)
+                    .frame(minWidth: 760)
             }
         }
-        .frame(minWidth: 860, minHeight: 640)
+        .frame(minWidth: 1_180, minHeight: 680)
         .task {
             await model.start()
         }
@@ -178,45 +178,57 @@ struct ContentView: View {
     }
 
     private var detail: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(L10n.string("section.latest_artifact"))
-                .font(.headline)
-
-            if let artifact = model.lastArtifact,
-                let image = NSImage(contentsOf: artifact.fileURL)
-            {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
-                    metadataRow(L10n.string("metadata.mode"), L10n.sourceKind(artifact.source.kind))
-                    metadataRow(L10n.string("metadata.source"), artifact.source.title)
-                    metadataRow(
-                        L10n.string("metadata.size"),
-                        "\(artifact.pixelWidth) × \(artifact.pixelHeight)"
-                    )
-                    metadataRow(
-                        L10n.string("metadata.bytes"),
-                        ByteCountFormatter.string(fromByteCount: Int64(artifact.byteCount), countStyle: .file)
-                    )
-                    metadataRow(L10n.string("metadata.sha256"), artifact.sha256)
-                    metadataRow(L10n.string("metadata.file"), artifact.fileURL.path)
-                }
-                .font(.caption)
-                .textSelection(.enabled)
+        Group {
+            if model.activeProject != nil {
+                ScreenshotEditorView(model: model)
             } else {
-                ContentUnavailableView(
-                    L10n.string("empty.no_capture.title"),
-                    systemImage: "photo.on.rectangle.angled",
-                    description: Text(L10n.string("empty.no_capture.description"))
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(L10n.string("section.latest_artifact"))
+                        .font(.headline)
+
+                    if let artifact = model.lastArtifact,
+                        let image = NSImage(contentsOf: artifact.fileURL)
+                    {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+
+                        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                            metadataRow(
+                                L10n.string("metadata.mode"),
+                                L10n.sourceKind(artifact.source.kind)
+                            )
+                            metadataRow(L10n.string("metadata.source"), artifact.source.title)
+                            metadataRow(
+                                L10n.string("metadata.size"),
+                                "\(artifact.pixelWidth) × \(artifact.pixelHeight)"
+                            )
+                            metadataRow(
+                                L10n.string("metadata.bytes"),
+                                ByteCountFormatter.string(
+                                    fromByteCount: Int64(artifact.byteCount),
+                                    countStyle: .file
+                                )
+                            )
+                            metadataRow(L10n.string("metadata.sha256"), artifact.sha256)
+                            metadataRow(L10n.string("metadata.file"), artifact.fileURL.path)
+                        }
+                        .font(.caption)
+                        .textSelection(.enabled)
+                    } else {
+                        ContentUnavailableView(
+                            L10n.string("empty.no_capture.title"),
+                            systemImage: "photo.on.rectangle.angled",
+                            description: Text(L10n.string("empty.no_capture.description"))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .padding(18)
             }
         }
-        .padding(18)
     }
 
     private var captureDisabled: Bool {
