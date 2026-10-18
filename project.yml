@@ -1,0 +1,115 @@
+name: Mupaw
+
+options:
+  minimumXcodeGenVersion: 2.44.1
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    CLANG_ENABLE_MODULES: YES
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+
+packages:
+  MCP:
+    url: https://github.com/modelcontextprotocol/swift-sdk.git
+    exactVersion: 0.12.1
+
+targets:
+  MupawCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - Sources/MupawCore
+    settings:
+      base:
+        PRODUCT_MODULE_NAME: MupawCore
+        SKIP_INSTALL: YES
+
+  MupawCapture:
+    type: library.static
+    platform: macOS
+    sources:
+      - Sources/MupawCapture
+    dependencies:
+      - target: MupawCore
+    settings:
+      base:
+        PRODUCT_MODULE_NAME: MupawCapture
+        SKIP_INSTALL: YES
+
+  Mupaw:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/MupawApp
+    dependencies:
+      - target: MupawCore
+      - target: MupawCapture
+    info:
+      path: Config/Mupaw-Info.plist
+      properties:
+        CFBundleDisplayName: Mupaw
+        CFBundleName: Mupaw
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: 1
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "26.0"
+        NSHighResolutionCapable: true
+        NSCameraUsageDescription: Mupaw uses the camera only when you enable a camera overlay for a recording.
+        NSMicrophoneUsageDescription: Mupaw uses the microphone only when you enable microphone audio for a recording.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw
+        PRODUCT_NAME: Mupaw
+        GENERATE_INFOPLIST_FILE: NO
+
+  MupawMCP:
+    type: tool
+    platform: macOS
+    productName: mupaw-mcp
+    sources:
+      - Sources/MupawMCP
+    dependencies:
+      - target: MupawCore
+      - package: MCP
+        product: MCP
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.mcp
+        PRODUCT_NAME: mupaw-mcp
+
+  MupawCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/MupawCoreTests
+    dependencies:
+      - target: MupawCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.core-tests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Mupaw:
+    build:
+      targets:
+        Mupaw: all
+        MupawMCP: all
+        MupawCoreTests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - MupawCoreTests
+
+  MupawMCP:
+    build:
+      targets:
+        MupawMCP: all

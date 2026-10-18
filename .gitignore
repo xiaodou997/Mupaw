@@ -1,0 +1,27 @@
+# Xcode / Swift
+.DS_Store
+DerivedData/
+.build/
+build/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.profraw
+*.profdata
+.swiftpm/
+
+# Generated project (regenerate with `make generate`)
+Mupaw.xcodeproj/
+Config/Mupaw-Info.plist
+
+# SwiftPM
+Package.resolved
+
+# Runtime artifacts
+artifacts/
+*.log
+
+# Local configuration
+.env
+.env.*
+!.env.example
