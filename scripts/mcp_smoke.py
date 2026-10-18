@@ -12,6 +12,7 @@ import os
 import selectors
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -124,6 +125,21 @@ def parse_status(tool_result: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
+def expect_tool_error(
+    tool_result: dict[str, Any],
+    tool_name: str,
+    expected_fragment: str,
+) -> str:
+    if tool_result.get("isError") is not True:
+        raise SmokeFailure(f"{tool_name} unexpectedly succeeded")
+    message = text_content(tool_result, tool_name)
+    if expected_fragment not in message:
+        raise SmokeFailure(
+            f"{tool_name} error omitted {expected_fragment!r}: {message!r}"
+        )
+    return message
+
+
 def image_content(tool_result: dict[str, Any], tool_name: str) -> dict[str, Any]:
     content = tool_result.get("content")
     if not isinstance(content, list):
@@ -234,7 +250,77 @@ def capture_and_validate(
     }
 
 
-def run(executable: Path, require_running: bool, capture_one: bool) -> dict[str, Any]:
+def select_mupaw_window(sources: list[Any]) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in sources
+        if isinstance(item, dict)
+        and item.get("kind") == "window"
+        and item.get("applicationName") == "Mupaw"
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda item: int(item.get("pixelWidth", 0))
+        * int(item.get("pixelHeight", 0)),
+    )
+
+
+def run_negative_checks(
+    process: subprocess.Popen[bytes],
+    status: dict[str, Any],
+) -> dict[str, str]:
+    checks: dict[str, str] = {}
+
+    checks["unknownTool"] = expect_tool_error(
+        call_tool(process, 20, "mupaw_unknown_tool"),
+        "mupaw_unknown_tool",
+        "Unknown Mupaw tool",
+    )
+    checks["missingSourceID"] = expect_tool_error(
+        call_tool(process, 21, "mupaw_screenshot_capture"),
+        "mupaw_screenshot_capture",
+        "source_id is required",
+    )
+    checks["unsupportedFormat"] = expect_tool_error(
+        call_tool(
+            process,
+            22,
+            "mupaw_screenshot_capture",
+            {"source_id": "display:not-used", "format": "gif"},
+        ),
+        "mupaw_screenshot_capture",
+        "supports only PNG",
+    )
+
+    permissions = status.get("permissions")
+    if status.get("running") is True and isinstance(permissions, dict):
+        if permissions.get("screenCapture") == "authorized":
+            checks["inventedSource"] = expect_tool_error(
+                call_tool(
+                    process,
+                    23,
+                    "mupaw_screenshot_capture",
+                    {"source_id": "window:does-not-exist", "format": "png"},
+                ),
+                "mupaw_screenshot_capture",
+                "source_not_found",
+            )
+
+    recovered = parse_status(call_tool(process, 24, "mupaw_app_status"))
+    if recovered.get("running") != status.get("running"):
+        raise SmokeFailure("Mupaw app status changed after MCP negative checks")
+    checks["statusAfterErrors"] = "ok"
+    return checks
+
+
+def run(
+    executable: Path,
+    require_running: bool,
+    capture_one: bool,
+    negative: bool,
+) -> dict[str, Any]:
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise SmokeFailure(f"MCP executable is missing or not executable: {executable}")
 
@@ -293,6 +379,7 @@ def run(executable: Path, require_running: bool, capture_one: bool) -> dict[str,
         source_check: dict[str, Any] | None = None
         availability_check: dict[str, Any] | None = None
         capture_check: dict[str, Any] | None = None
+        negative_checks: dict[str, str] | None = None
         if status["running"]:
             capabilities = parse_json_result(
                 call_tool(process, 4, "mupaw_capabilities_get"),
@@ -334,32 +421,40 @@ def run(executable: Path, require_running: bool, capture_one: bool) -> dict[str,
                     raise SmokeFailure("mupaw_sources_list returned no display source")
                 source_check = {"mode": "authorized", "sourceCount": len(sources)}
                 if capture_one:
-                    mupaw_windows = [
-                        item
-                        for item in sources
-                        if isinstance(item, dict)
-                        and item.get("kind") == "window"
-                        and item.get("applicationName") == "Mupaw"
-                    ]
-                    selected_source = (
-                        max(
-                            mupaw_windows,
-                            key=lambda item: int(item.get("pixelWidth", 0))
-                            * int(item.get("pixelHeight", 0)),
+                    selected_source = select_mupaw_window(sources)
+                    capture_request_id = 6
+                    if selected_source is None:
+                        # App startup may have populated the five-second source cache before
+                        # the SwiftUI window became visible. Wait for that bounded cache to
+                        # expire, then require a Mupaw-owned window rather than capturing an
+                        # unrelated full display during automated validation.
+                        time.sleep(5.25)
+                        refreshed_payload = parse_json_result(
+                            call_tool(process, 6, "mupaw_sources_list"),
+                            "mupaw_sources_list",
                         )
-                        if mupaw_windows
-                        else next(
-                            (
-                                item
-                                for item in sources
-                                if isinstance(item, dict) and item.get("kind") == "display"
-                            ),
-                            None,
+                        refreshed_sources = refreshed_payload.get("sources")
+                        if not isinstance(refreshed_sources, list):
+                            raise SmokeFailure(
+                                "Refreshed mupaw_sources_list omitted the sources array"
+                            )
+                        sources = refreshed_sources
+                        source_check = {
+                            "mode": "authorized",
+                            "sourceCount": len(sources),
+                            "refreshedForCapture": True,
+                        }
+                        selected_source = select_mupaw_window(sources)
+                        capture_request_id = 7
+                    if selected_source is None:
+                        raise SmokeFailure(
+                            "No visible Mupaw window was available for a privacy-safe smoke screenshot"
                         )
+                    capture_check = capture_and_validate(
+                        process,
+                        capture_request_id,
+                        selected_source,
                     )
-                    if not isinstance(selected_source, dict):
-                        raise SmokeFailure("No eligible source was available for a real screenshot")
-                    capture_check = capture_and_validate(process, 6, selected_source)
             else:
                 if sources_result.get("isError") is not True:
                     raise SmokeFailure(
@@ -395,6 +490,9 @@ def run(executable: Path, require_running: bool, capture_one: bool) -> dict[str,
             if capture_one:
                 raise SmokeFailure("--capture-one requires a running Mupaw.app instance")
 
+        if negative:
+            negative_checks = run_negative_checks(process, status)
+
         return {
             "server": server_info,
             "protocolVersion": initialize.get("protocolVersion"),
@@ -404,6 +502,7 @@ def run(executable: Path, require_running: bool, capture_one: bool) -> dict[str,
             "capabilities": capability_summary,
             "sourcesCheck": source_check,
             "captureCheck": capture_check,
+            "negativeChecks": negative_checks,
         }
     finally:
         process.terminate()
@@ -419,10 +518,16 @@ def main() -> int:
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--require-running", action="store_true")
     parser.add_argument("--capture-one", action="store_true")
+    parser.add_argument("--negative", action="store_true")
     args = parser.parse_args()
 
     try:
-        summary = run(args.executable.resolve(), args.require_running, args.capture_one)
+        summary = run(
+            args.executable.resolve(),
+            args.require_running,
+            args.capture_one,
+            args.negative,
+        )
     except SmokeFailure as error:
         print(f"MCP smoke test failed: {error}", file=sys.stderr)
         return 1

@@ -127,12 +127,7 @@ public struct AgentRPCClient: Sendable {
             throw AgentRPCClientError.appUnavailable(errnoMessage(prefix: "connect"))
         }
 
-        var payload = try JSONEncoder.mupaw.encode(request)
-        payload.append(0x0A)
-        guard payload.count <= MupawConstants.maximumRPCFrameBytes else {
-            throw AgentRPCClientError.frameTooLarge
-        }
-
+        let payload = try AgentRPCProtocolCodec.encodeRequestFrame(request)
         try sendAll(payload, socketFD: socketFD)
         _ = Darwin.shutdown(socketFD, SHUT_WR)
         let responseData = try receiveLine(socketFD: socketFD)
@@ -181,8 +176,14 @@ public struct AgentRPCClient: Sendable {
             }
 
             if let newlineIndex = buffer[..<count].firstIndex(of: 0x0A) {
+                guard data.count + newlineIndex + 1 <= MupawConstants.maximumRPCFrameBytes else {
+                    throw AgentRPCClientError.frameTooLarge
+                }
                 data.append(contentsOf: buffer[..<newlineIndex])
                 return data
+            }
+            guard data.count + count + 1 <= MupawConstants.maximumRPCFrameBytes else {
+                throw AgentRPCClientError.frameTooLarge
             }
             data.append(contentsOf: buffer[..<count])
         }

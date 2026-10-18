@@ -31,6 +31,7 @@ Pure shared types and local transport support:
 - capability and permission models;
 - source and artifact descriptors;
 - RPC request/response envelopes;
+- a strict request decoder and bounded response-frame encoder;
 - connection descriptor storage;
 - bounded local RPC client;
 - filename validation.
@@ -65,11 +66,17 @@ Application-owned platform services:
 - generate a random bearer token per app launch;
 - save the descriptor under the user's Application Support directory;
 - set descriptor permissions to owner read/write only;
-- cap a request or response frame at 4 MiB;
-- accept one newline-delimited JSON request per connection in M0;
-- validate protocol version before dispatch.
+- cap every newline-delimited request or response frame at 4 MiB, including the delimiter;
+- accept exactly one JSON request per connection in M0;
+- decode the wire method as a string first so an unsupported method returns `unknown_method` instead of collapsing into a generic decoding error;
+- preserve a bounded, valid request ID on structured errors; use `unknown` when no safe ID can be trusted;
+- validate the protocol version and bearer token before resolving or dispatching the requested method;
+- replace an oversized encoded response with a small `frame_too_large` response carrying the same safe request ID;
+- tolerate interrupted system calls and peer disconnects without terminating the app.
 
 This is a local development contract, not a remote API. A later XPC migration remains possible because the domain request/response types are transport-neutral.
+
+The deterministic codec tests cover malformed structures and oversized-response fallback. A raw loopback smoke test additionally exercises the running app with bad tokens, unknown methods, malformed JSON, oversized frames, early disconnects, and concurrent connections.
 
 ## Milestone evolution
 

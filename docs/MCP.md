@@ -36,7 +36,21 @@ M0 supports PNG. The result includes artifact metadata, a local file URL, and a 
 - `app_not_running`: start Mupaw and retry;
 - `permission_required`: grant Screen & System Audio Recording permission to Mupaw;
 - `source_not_found`: refresh sources and use a returned source ID;
-- `invalid_request`: correct arguments;
+- `invalid_request`: correct arguments or malformed structured data;
+- `unknown_method`: use a defined local RPC method or advertised MCP tool;
+- `protocol_mismatch`: update the helper and app together;
+- `unauthorized`: discard the stale local descriptor and reconnect to the running app;
+- `frame_too_large`: reduce the request or result below the 4 MiB local frame limit;
 - `capture_failed`: no artifact is claimed; inspect the accompanying message.
 
 The helper must distinguish a completed capture from merely accepting a request.
+
+MCP tool failures are returned as `isError: true` text content. The internal loopback RPC also returns a structured error code and a response ID. A safe request ID is preserved when the JSON object is structurally readable; malformed JSON and oversized frames use `unknown`.
+
+Validation commands:
+
+```bash
+make mcp-negative-smoke
+make rpc-negative-smoke
+make m0-acceptance
+```

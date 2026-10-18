@@ -218,24 +218,31 @@ final class AgentRPCServer: @unchecked Sendable {
         var response: AgentRPCResponse
         do {
             let data = try receiveLine(socketFD: socketFD)
-            let request = try JSONDecoder.mupaw.decode(AgentRPCRequest.self, from: data)
+            let wireRequest = try AgentRPCProtocolCodec.decodeWireRequest(data)
 
-            guard request.protocolVersion == MupawConstants.rpcProtocolVersion else {
+            guard wireRequest.protocolVersion == MupawConstants.rpcProtocolVersion else {
                 response = .failure(
-                    id: request.id,
+                    id: wireRequest.id,
                     code: .protocolMismatch,
-                    message: "Unsupported RPC protocol version \(request.protocolVersion)."
+                    message: "Unsupported RPC protocol version \(wireRequest.protocolVersion)."
                 )
                 try send(response, socketFD: socketFD)
                 return
             }
-            guard request.token == expectedToken else {
-                response = .failure(id: request.id, code: .unauthorized, message: "Invalid local RPC token.")
+            guard wireRequest.token == expectedToken else {
+                response = .failure(
+                    id: wireRequest.id,
+                    code: .unauthorized,
+                    message: "Invalid local RPC token."
+                )
                 try send(response, socketFD: socketFD)
                 return
             }
 
+            let request = try AgentRPCProtocolCodec.resolveMethod(in: wireRequest)
             response = await handler(request)
+        } catch let failure as AgentRPCProtocolFailure {
+            response = failure.response
         } catch AgentRPCClientError.frameTooLarge {
             response = .failure(
                 id: "unknown", code: .frameTooLarge, message: "RPC request exceeded the maximum frame size.")
@@ -260,8 +267,14 @@ final class AgentRPCServer: @unchecked Sendable {
                 throw POSIXServerError(operation: "receive")
             }
             if let newline = buffer[..<count].firstIndex(of: 0x0A) {
+                guard data.count + newline + 1 <= MupawConstants.maximumRPCFrameBytes else {
+                    throw AgentRPCClientError.frameTooLarge
+                }
                 data.append(contentsOf: buffer[..<newline])
                 return data
+            }
+            guard data.count + count + 1 <= MupawConstants.maximumRPCFrameBytes else {
+                throw AgentRPCClientError.frameTooLarge
             }
             data.append(contentsOf: buffer[..<count])
         }
@@ -276,17 +289,7 @@ final class AgentRPCServer: @unchecked Sendable {
     }
 
     private static func send(_ response: AgentRPCResponse, socketFD: Int32) throws {
-        var data = try JSONEncoder.mupaw.encode(response)
-        data.append(0x0A)
-        if data.count > MupawConstants.maximumRPCFrameBytes {
-            let fallback = AgentRPCResponse.failure(
-                id: response.id,
-                code: .frameTooLarge,
-                message: "RPC response exceeded the maximum frame size."
-            )
-            data = try JSONEncoder.mupaw.encode(fallback)
-            data.append(0x0A)
-        }
+        let data = try AgentRPCProtocolCodec.encodeResponseFrame(response)
 
         try data.withUnsafeBytes { bytes in
             guard let base = bytes.baseAddress else { return }

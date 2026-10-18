@@ -21,6 +21,10 @@ Package.resolved
 artifacts/
 *.log
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Local configuration
 .mupaw.local.mk
 .env

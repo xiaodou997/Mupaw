@@ -76,6 +76,21 @@ After granting Screen & System Audio Recording permission, run a real MCP screen
 make mcp-smoke-capture
 ```
 
+Exercise MCP argument failures and recovery, then exercise the authenticated loopback RPC directly with invalid tokens, unknown methods, malformed JSON, oversized frames, disconnects, and concurrent calls:
+
+```bash
+make mcp-negative-smoke
+make rpc-negative-smoke
+```
+
+Run the complete M0 acceptance sequence. It checks formatting and localization, runs all unit tests, rebuilds and restarts the stably signed development app, waits for the bridge, performs negative RPC checks, and finishes with a real MCP screenshot:
+
+```bash
+make m0-acceptance
+```
+
+`make m0-acceptance` expects the stable signing identity in `.mupaw.local.mk` and Screen & System Audio Recording permission to have been granted to `~/Applications/Mupaw.app`.
+
 Open the generated project when UI debugging is needed:
 
 ```bash
@@ -90,13 +105,13 @@ Run `make localization-check` after changing translations. It verifies that both
 
 ## Repository layout
 
-- `Sources/MupawCore`: shared models, local RPC protocol, storage paths, and client code
+- `Sources/MupawCore`: shared models, bounded RPC codec, storage paths, and client code
 - `Sources/MupawCapture`: ScreenCaptureKit and permission services owned by the app
 - `Sources/MupawApp`: native macOS application and local RPC server
 - `Sources/MupawMCP`: MCP stdio bridge for Agent clients
 - `Resources/MupawApp`: localized UI and Info.plist resources
 - `Tests`: deterministic unit tests
-- `scripts`: reproducible local validation and MCP protocol smoke tests
+- `scripts`: reproducible localization, MCP, raw RPC, and real-capture smoke tests
 - `docs`: architecture, localization, MCP contract, and milestone acceptance criteria
 
 ## Licensing
