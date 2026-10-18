@@ -3,6 +3,14 @@ import Foundation
 import MupawCore
 @preconcurrency import ScreenCaptureKit
 
+private func captureLocalizedString(_ key: String) -> String {
+    Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+}
+
+private func captureLocalizedFormat(_ key: String, _ arguments: CVarArg...) -> String {
+    String(format: captureLocalizedString(key), locale: Locale.current, arguments: arguments)
+}
+
 public enum CaptureServiceError: Error, LocalizedError {
     case sourceNotFound(String)
     case invalidSourceSize(String)
@@ -10,9 +18,9 @@ public enum CaptureServiceError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .sourceNotFound(let identifier):
-            return "Capture source was not found: \(identifier)"
+            return captureLocalizedFormat("capture.error.source_not_found.format", identifier)
         case .invalidSourceSize(let identifier):
-            return "Capture source has an invalid size: \(identifier)"
+            return captureLocalizedFormat("capture.error.invalid_source_size.format", identifier)
         }
     }
 }
@@ -46,7 +54,7 @@ public final class CaptureService {
             let descriptor = CaptureSourceDescriptor(
                 id: identifier,
                 kind: .display,
-                title: "Display \(index + 1)",
+                title: captureLocalizedFormat("source.display.format", index + 1),
                 applicationName: nil,
                 pixelWidth: display.width,
                 pixelHeight: display.height,
@@ -71,7 +79,10 @@ public final class CaptureService {
             let identifier = "window:\(window.windowID)"
             let appName = window.owningApplication?.applicationName
             let title = window.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let displayTitle = title?.isEmpty == false ? title! : (appName ?? "Untitled Window")
+            let displayTitle =
+                title?.isEmpty == false
+                ? title!
+                : (appName ?? captureLocalizedString("source.untitled_window"))
             let descriptor = CaptureSourceDescriptor(
                 id: identifier,
                 kind: .window,

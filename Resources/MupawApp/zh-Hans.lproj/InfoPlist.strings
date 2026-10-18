@@ -1,0 +1,2 @@
+"NSCameraUsageDescription" = "仅当你在录屏中启用摄像头画中画时，Mupaw 才会使用摄像头。";
+"NSMicrophoneUsageDescription" = "仅当你在录屏中启用麦克风声音时，Mupaw 才会使用麦克风。";

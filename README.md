@@ -9,6 +9,7 @@ The first development milestone focuses on a reliable foundation:
 - a single application-owned capture service;
 - a local authenticated RPC bridge;
 - an MCP stdio server that exposes the same operations to Agents;
+- English and Simplified Chinese localization from the first version;
 - deterministic project files, tests, and local build commands.
 
 Long scrolling screenshots, annotations, OCR, audio recording, camera overlay, GIF export, click highlights, keystroke display, and automatic zoom are planned on top of this foundation. They are intentionally not mixed into M0 before the capture and Agent control path is proven.
@@ -23,15 +24,28 @@ Long scrolling screenshots, annotations, OCR, audio recording, camera overlay, G
 
 ```bash
 make generate
+make localization-check
 make lint
 make build
 make test
 ```
 
-Run the current development app:
+Install the signed development app at a stable path and open it:
 
 ```bash
 make run
+```
+
+The stable development path is:
+
+```text
+~/Applications/Mupaw.app
+```
+
+Open the macOS Screen & System Audio Recording settings pane:
+
+```bash
+make open-screen-recording-settings
 ```
 
 Validate the MCP executable without requiring the app to be open:
@@ -52,16 +66,23 @@ Open the generated project when UI debugging is needed:
 open Mupaw.xcodeproj
 ```
 
+## Localization
+
+The first version ships with English (`en`) and Simplified Chinese (`zh-Hans`). Mupaw follows the language selected by macOS, including the per-application language override in System Settings. UI strings and privacy usage descriptions are localized; MCP tool names and protocol identifiers remain stable English identifiers.
+
+Run `make localization-check` after changing translations. It verifies that both languages contain the same keys and that required privacy descriptions are present. See `docs/LOCALIZATION.md` for the extension workflow.
+
 ## Repository layout
 
 - `Sources/MupawCore`: shared models, local RPC protocol, storage paths, and client code
 - `Sources/MupawCapture`: ScreenCaptureKit and permission services owned by the app
 - `Sources/MupawApp`: native macOS application and local RPC server
 - `Sources/MupawMCP`: MCP stdio bridge for Agent clients
+- `Resources/MupawApp`: localized UI and Info.plist resources
 - `Tests`: deterministic unit tests
-- `scripts`: reproducible local MCP protocol smoke tests
-- `docs`: architecture, MCP contract, and milestone acceptance criteria
+- `scripts`: reproducible local validation and MCP protocol smoke tests
+- `docs`: architecture, localization, MCP contract, and milestone acceptance criteria
 
 ## Licensing
 
-The public license is deliberately not frozen in M0. The intended product is free and source-available/open-source, with no commercial product planned by the maintainer. A standard open-source license and a strict non-commercial source license have different legal effects, so the choice must be fixed before the first public release or outside contribution.
+No public license has been frozen yet. GPL-3.0 permits commercial use, while a strict “no commercial use by others” requirement needs a non-commercial source license and is not OSI open source. The repository must not add a misleading GPL notice until that choice is resolved explicitly.

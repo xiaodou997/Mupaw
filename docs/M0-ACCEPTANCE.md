@@ -7,11 +7,15 @@ M0 is complete only when all of the following are true on a real macOS 26+ machi
 - `make generate` succeeds from a clean checkout.
 - the Mupaw app and `mupaw-mcp` helper compile with Swift 6 strict concurrency;
 - deterministic unit tests pass;
+- `make localization-check` confirms English and Simplified Chinese key parity;
 - `make mcp-smoke` validates MCP initialization, tool discovery, and the app-status contract;
 - the source tree contains no generated build artifacts or secrets.
 
 ## Native app
 
+- the app ships English and Simplified Chinese UI and privacy descriptions;
+- the app follows the macOS system or per-application language selection;
+- `make install-dev` creates a signed app at `~/Applications/Mupaw.app`;
 - the app shows the current screen-recording permission state;
 - the app can request screen-recording permission through an explicit user action;
 - after authorization it lists active displays and eligible on-screen windows;

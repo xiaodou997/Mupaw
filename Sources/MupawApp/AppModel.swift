@@ -16,7 +16,7 @@ final class AppModel {
     private(set) var sources: [CaptureSourceDescriptor] = []
     var selectedSourceID: String?
     private(set) var lastArtifact: ScreenshotArtifact?
-    private(set) var rpcStatus = "Not started"
+    private(set) var rpcStatus = L10n.string("rpc.not_started")
     private(set) var isBusy = false
     var errorMessage: String?
 
@@ -38,8 +38,10 @@ final class AppModel {
             )
             self.paths = fallback
             self.captureService = CaptureService(paths: fallback)
-            self.errorMessage =
-                "Application Support was unavailable; using a temporary directory: \(error.localizedDescription)"
+            self.errorMessage = L10n.format(
+                "error.app_support_fallback.format",
+                error.localizedDescription
+            )
         }
     }
 
@@ -59,10 +61,10 @@ final class AppModel {
             }
             let descriptor = try server.start()
             rpcServer = server
-            rpcStatus = "Agent bridge ready on 127.0.0.1:\(descriptor.port)"
+            rpcStatus = L10n.format("rpc.ready.format", Int(descriptor.port))
         } catch {
-            rpcStatus = "Agent bridge failed"
-            errorMessage = error.localizedDescription
+            rpcStatus = L10n.string("rpc.failed")
+            errorMessage = localizedMessage(for: error)
         }
 
         if permissions.screenCapture == .authorized {
@@ -73,7 +75,7 @@ final class AppModel {
     func shutdown() {
         rpcServer?.stop()
         rpcServer = nil
-        rpcStatus = "Stopped"
+        rpcStatus = L10n.string("rpc.stopped")
     }
 
     func refreshPermissions() {
@@ -97,7 +99,7 @@ final class AppModel {
 
     func captureSelectedSource() async {
         guard let selectedSourceID else {
-            errorMessage = "Select a display or window first."
+            errorMessage = L10n.string("error.select_source")
             return
         }
         await performBusyWork {
@@ -116,9 +118,21 @@ final class AppModel {
         do {
             try await operation()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = localizedMessage(for: error)
             refreshPermissions()
         }
+    }
+
+    private func localizedMessage(for error: Error) -> String {
+        if let captureError = error as? CaptureServiceError {
+            switch captureError {
+            case .sourceNotFound(let identifier):
+                return L10n.format("capture.error.source_not_found.format", identifier)
+            case .invalidSourceSize(let identifier):
+                return L10n.format("capture.error.invalid_source_size.format", identifier)
+            }
+        }
+        return error.localizedDescription
     }
 
     private func handleRPC(_ request: AgentRPCRequest) async -> AgentRPCResponse {

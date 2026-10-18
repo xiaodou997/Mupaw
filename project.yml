@@ -4,6 +4,7 @@ options:
   minimumXcodeGenVersion: 2.44.1
   deploymentTarget:
     macOS: "26.0"
+  developmentLanguage: en
   createIntermediateGroups: true
 
 settings:
@@ -49,6 +50,8 @@ targets:
     platform: macOS
     sources:
       - Sources/MupawApp
+      - path: Resources/MupawApp
+        buildPhase: resources
     dependencies:
       - target: MupawCore
       - target: MupawCapture

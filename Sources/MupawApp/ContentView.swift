@@ -21,17 +21,17 @@ struct ContentView: View {
             await model.start()
         }
         .alert(
-            "Mupaw could not complete the operation",
+            L10n.string("alert.operation_failed.title"),
             isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }
             )
         ) {
-            Button("OK", role: .cancel) {
+            Button(L10n.string("common.ok"), role: .cancel) {
                 model.errorMessage = nil
             }
         } message: {
-            Text(model.errorMessage ?? "Unknown error")
+            Text(model.errorMessage ?? L10n.string("error.unknown"))
         }
     }
 
@@ -42,12 +42,14 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Mupaw")
                     .font(.title2.bold())
-                Text("Native capture for people and Agents")
+                Text(L10n.string("app.tagline"))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             StatusPill(
-                title: model.permissions.screenCapture == .authorized ? "Capture ready" : "Permission required",
+                title: model.permissions.screenCapture == .authorized
+                    ? L10n.string("status.capture_ready")
+                    : L10n.string("status.permission_required"),
                 systemImage: model.permissions.screenCapture == .authorized
                     ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
             )
@@ -58,19 +60,19 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            GroupBox("Permissions") {
+            GroupBox(L10n.string("group.permissions")) {
                 VStack(alignment: .leading, spacing: 9) {
-                    permissionRow("Screen capture", model.permissions.screenCapture)
-                    permissionRow("Microphone", model.permissions.microphone)
-                    permissionRow("Camera", model.permissions.camera)
-                    permissionRow("Accessibility", model.permissions.accessibility)
-                    permissionRow("Input monitoring", model.permissions.inputMonitoring)
+                    permissionRow(L10n.string("permission.screen_capture"), model.permissions.screenCapture)
+                    permissionRow(L10n.string("permission.microphone"), model.permissions.microphone)
+                    permissionRow(L10n.string("permission.camera"), model.permissions.camera)
+                    permissionRow(L10n.string("permission.accessibility"), model.permissions.accessibility)
+                    permissionRow(L10n.string("permission.input_monitoring"), model.permissions.inputMonitoring)
 
                     HStack {
-                        Button("Refresh") {
+                        Button(L10n.string("action.refresh")) {
                             model.refreshPermissions()
                         }
-                        Button("Request screen access") {
+                        Button(L10n.string("action.request_screen_access")) {
                             model.requestScreenCapturePermission()
                         }
                     }
@@ -80,7 +82,7 @@ struct ContentView: View {
                 .padding(6)
             }
 
-            GroupBox("Capture sources") {
+            GroupBox(L10n.string("group.capture_sources")) {
                 VStack(spacing: 8) {
                     List(model.sources, selection: $model.selectedSourceID) { source in
                         HStack {
@@ -98,11 +100,11 @@ struct ContentView: View {
                     .frame(minHeight: 230)
 
                     HStack {
-                        Button("Refresh sources") {
+                        Button(L10n.string("action.refresh_sources")) {
                             Task { await model.refreshSources() }
                         }
                         Spacer()
-                        Button("Capture") {
+                        Button(L10n.string("action.capture")) {
                             Task { await model.captureSelectedSource() }
                         }
                         .buttonStyle(.borderedProminent)
@@ -117,7 +119,7 @@ struct ContentView: View {
 
     private var detail: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Latest artifact")
+            Text(L10n.string("section.latest_artifact"))
                 .font(.headline)
 
             if let artifact = model.lastArtifact,
@@ -130,20 +132,25 @@ struct ContentView: View {
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
 
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
-                    metadataRow("Source", artifact.source.title)
-                    metadataRow("Size", "\(artifact.pixelWidth) × \(artifact.pixelHeight)")
+                    metadataRow(L10n.string("metadata.source"), artifact.source.title)
                     metadataRow(
-                        "Bytes", ByteCountFormatter.string(fromByteCount: Int64(artifact.byteCount), countStyle: .file))
-                    metadataRow("SHA-256", artifact.sha256)
-                    metadataRow("File", artifact.fileURL.path)
+                        L10n.string("metadata.size"),
+                        "\(artifact.pixelWidth) × \(artifact.pixelHeight)"
+                    )
+                    metadataRow(
+                        L10n.string("metadata.bytes"),
+                        ByteCountFormatter.string(fromByteCount: Int64(artifact.byteCount), countStyle: .file)
+                    )
+                    metadataRow(L10n.string("metadata.sha256"), artifact.sha256)
+                    metadataRow(L10n.string("metadata.file"), artifact.fileURL.path)
                 }
                 .font(.caption)
                 .textSelection(.enabled)
             } else {
                 ContentUnavailableView(
-                    "No capture yet",
+                    L10n.string("empty.no_capture.title"),
                     systemImage: "photo.on.rectangle.angled",
-                    description: Text("Select a source and capture it. Agent-created screenshots will appear here too.")
+                    description: Text(L10n.string("empty.no_capture.description"))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -156,7 +163,7 @@ struct ContentView: View {
             Image(systemName: status == .authorized ? "checkmark.circle.fill" : "circle.dashed")
             Text(title)
             Spacer()
-            Text(status.rawValue)
+            Text(L10n.permissionStatus(status))
                 .foregroundStyle(.secondary)
         }
     }
