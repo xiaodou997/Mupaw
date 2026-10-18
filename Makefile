@@ -11,7 +11,7 @@ DEV_CODE_SIGN_IDENTITY ?= -
 
 -include .mupaw.local.mk
 
-.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings mcp-smoke mcp-smoke-running mcp-smoke-capture mcp-smoke-full-screen mcp-negative-smoke mcp-capture-conflict-smoke m1b-smoke m1c-smoke rpc-negative-smoke m0-acceptance m1a-acceptance m1b-acceptance m1c-acceptance clean open
+.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings mcp-smoke mcp-smoke-running mcp-smoke-capture mcp-smoke-full-screen mcp-negative-smoke mcp-capture-conflict-smoke m1b-smoke m1c-smoke m1d-smoke rpc-negative-smoke m0-acceptance m1a-acceptance m1b-acceptance m1c-acceptance m1d-acceptance clean open
 
 generate:
 	xcodegen generate
@@ -96,6 +96,9 @@ m1b-smoke: build
 m1c-smoke: build
 	python3 scripts/m1c_smoke.py --executable "$(MCP_PATH)"
 
+m1d-smoke: build
+	python3 scripts/m1d_smoke.py --executable "$(MCP_PATH)"
+
 rpc-negative-smoke:
 	python3 scripts/rpc_negative_smoke.py
 
@@ -129,6 +132,16 @@ m1c-acceptance:
 	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running --negative --capture-one
 	python3 scripts/m1b_smoke.py --executable "$(MCP_PATH)"
 	python3 scripts/m1c_smoke.py --executable "$(MCP_PATH)"
+
+m1d-acceptance:
+	@$(MAKE) lint
+	@$(MAKE) test
+	@$(MAKE) run
+	python3 scripts/rpc_negative_smoke.py --wait-seconds 15
+	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running --negative --capture-one
+	python3 scripts/m1b_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m1c_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m1d_smoke.py --executable "$(MCP_PATH)"
 
 open: generate
 	open $(PROJECT)

@@ -6,6 +6,7 @@ struct ScreenshotEditorView: View {
     @Bindable var model: AppModel
     @State private var showsCropEditor = false
     @State private var showsColorRegionSampler = false
+    @State private var showsStyleEditor = false
 
     var body: some View {
         if let project = model.activeProject,
@@ -54,6 +55,9 @@ struct ScreenshotEditorView: View {
                     .frame(width: 520, height: 320)
                 }
             }
+            .sheet(isPresented: $showsStyleEditor) {
+                ScreenshotStyleEditorSheet(model: model, project: project)
+            }
         } else {
             ContentUnavailableView(
                 L10n.string("editor.empty.title"),
@@ -85,6 +89,12 @@ struct ScreenshotEditorView: View {
                 L10n.string("editor.tool.crop"),
                 systemImage: "crop",
                 action: { showsCropEditor = true }
+            )
+            toolButton(
+                L10n.string("editor.tool.style"),
+                systemImage: "wand.and.stars",
+                isSelected: project.content.visualStyle != nil,
+                action: { showsStyleEditor = true }
             )
 
             Divider().frame(height: 24)
@@ -145,7 +155,12 @@ struct ScreenshotEditorView: View {
             }
             .help(L10n.string("editor.action.reset"))
             .accessibilityLabel(L10n.string("editor.action.reset"))
-            .disabled(model.isBusy || (project.content.objects.isEmpty && project.content.cropRect == nil))
+            .disabled(
+                model.isBusy
+                    || (project.content.objects.isEmpty
+                        && project.content.cropRect == nil
+                        && project.content.visualStyle == nil)
+            )
 
             Spacer()
 
@@ -191,9 +206,13 @@ struct ScreenshotEditorView: View {
         image: NSImage
     ) -> some View {
         GeometryReader { proxy in
+            let layout = project.visualLayout
             let mapping = EditorCanvasMapping(
                 containerSize: proxy.size,
-                visibleBounds: project.visibleBounds
+                visibleBounds: project.visibleBounds,
+                outputPixelWidth: preview.pixelWidth,
+                outputPixelHeight: preview.pixelHeight,
+                contentFramePixels: layout?.cardFrame
             )
             ZStack {
                 Color(nsColor: .windowBackgroundColor)
@@ -339,6 +358,9 @@ struct ScreenshotEditorView: View {
             Text(L10n.format("editor.objects.format", project.content.objects.count))
             if project.content.cropRect != nil {
                 Label(L10n.string("editor.crop.active"), systemImage: "crop")
+            }
+            if project.content.visualStyle != nil {
+                Label(L10n.string("editor.style.active"), systemImage: "wand.and.stars")
             }
             Spacer()
             Text(project.id)
@@ -879,24 +901,33 @@ private struct CropEditorSheet: View {
 struct EditorCanvasMapping {
     let visibleBounds: ImagePixelRect
     let imageFrame: CGRect
+    let contentFrame: CGRect
     let scale: CGFloat
 
-    init(containerSize: CGSize, visibleBounds: ImagePixelRect) {
+    init(
+        containerSize: CGSize,
+        visibleBounds: ImagePixelRect,
+        outputPixelWidth: Int? = nil,
+        outputPixelHeight: Int? = nil,
+        contentFramePixels: ImagePixelRect? = nil
+    ) {
         self.visibleBounds = visibleBounds.standardized
-        let safeWidth = max(1, self.visibleBounds.width)
-        let safeHeight = max(1, self.visibleBounds.height)
+        let safeContentWidth = max(1, self.visibleBounds.width)
+        let safeContentHeight = max(1, self.visibleBounds.height)
+        let outputWidth = max(1, Double(outputPixelWidth ?? Int(ceil(safeContentWidth))))
+        let outputHeight = max(1, Double(outputPixelHeight ?? Int(ceil(safeContentHeight))))
         let padding: CGFloat = 20
         let available = CGSize(
             width: max(1, containerSize.width - padding * 2),
             height: max(1, containerSize.height - padding * 2)
         )
         scale = min(
-            available.width / CGFloat(safeWidth),
-            available.height / CGFloat(safeHeight)
+            available.width / CGFloat(outputWidth),
+            available.height / CGFloat(outputHeight)
         )
         let size = CGSize(
-            width: CGFloat(safeWidth) * scale,
-            height: CGFloat(safeHeight) * scale
+            width: CGFloat(outputWidth) * scale,
+            height: CGFloat(outputHeight) * scale
         )
         imageFrame = CGRect(
             x: (containerSize.width - size.width) / 2,
@@ -904,29 +935,49 @@ struct EditorCanvasMapping {
             width: size.width,
             height: size.height
         )
+
+        let pixels =
+            contentFramePixels?.standardized
+            ?? ImagePixelRect(x: 0, y: 0, width: outputWidth, height: outputHeight)
+        contentFrame = CGRect(
+            x: imageFrame.minX + CGFloat(pixels.minX) * scale,
+            y: imageFrame.minY + CGFloat(pixels.minY) * scale,
+            width: CGFloat(pixels.width) * scale,
+            height: CGFloat(pixels.height) * scale
+        )
     }
 
     func viewRect(for rect: ImagePixelRect) -> CGRect {
         let value = rect.standardized
+        let contentScaleX = contentFrame.width / CGFloat(max(1, visibleBounds.width))
+        let contentScaleY = contentFrame.height / CGFloat(max(1, visibleBounds.height))
         return CGRect(
-            x: imageFrame.minX + CGFloat(value.minX - visibleBounds.minX) * scale,
-            y: imageFrame.minY + CGFloat(value.minY - visibleBounds.minY) * scale,
-            width: CGFloat(value.width) * scale,
-            height: CGFloat(value.height) * scale
+            x: contentFrame.minX + CGFloat(value.minX - visibleBounds.minX) * contentScaleX,
+            y: contentFrame.minY + CGFloat(value.minY - visibleBounds.minY) * contentScaleY,
+            width: CGFloat(value.width) * contentScaleX,
+            height: CGFloat(value.height) * contentScaleY
         )
     }
 
     func viewPoint(for point: ImagePixelPoint) -> CGPoint {
-        CGPoint(
-            x: imageFrame.minX + CGFloat(point.x - visibleBounds.minX) * scale,
-            y: imageFrame.minY + CGFloat(point.y - visibleBounds.minY) * scale
+        let contentScaleX = contentFrame.width / CGFloat(max(1, visibleBounds.width))
+        let contentScaleY = contentFrame.height / CGFloat(max(1, visibleBounds.height))
+        return CGPoint(
+            x: contentFrame.minX + CGFloat(point.x - visibleBounds.minX) * contentScaleX,
+            y: contentFrame.minY + CGFloat(point.y - visibleBounds.minY) * contentScaleY
         )
     }
 
     func pixelPoint(for viewPoint: CGPoint) -> ImagePixelPoint? {
-        guard imageFrame.contains(viewPoint), scale > 0 else { return nil }
-        let x = visibleBounds.minX + Double((viewPoint.x - imageFrame.minX) / scale)
-        let y = visibleBounds.minY + Double((viewPoint.y - imageFrame.minY) / scale)
+        guard contentFrame.contains(viewPoint), contentFrame.width > 0, contentFrame.height > 0 else {
+            return nil
+        }
+        let x =
+            visibleBounds.minX
+            + Double((viewPoint.x - contentFrame.minX) / contentFrame.width) * visibleBounds.width
+        let y =
+            visibleBounds.minY
+            + Double((viewPoint.y - contentFrame.minY) / contentFrame.height) * visibleBounds.height
         return ImagePixelPoint(
             x: min(max(x, visibleBounds.minX), visibleBounds.maxX.nextDown),
             y: min(max(y, visibleBounds.minY), visibleBounds.maxY.nextDown)
@@ -934,10 +985,10 @@ struct EditorCanvasMapping {
     }
 
     func pixelDelta(for translation: CGSize) -> (width: Double, height: Double) {
-        guard scale > 0 else { return (0, 0) }
+        guard contentFrame.width > 0, contentFrame.height > 0 else { return (0, 0) }
         return (
-            Double(translation.width / scale),
-            Double(translation.height / scale)
+            Double(translation.width / contentFrame.width) * visibleBounds.width,
+            Double(translation.height / contentFrame.height) * visibleBounds.height
         )
     }
 }

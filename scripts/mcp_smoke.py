@@ -546,6 +546,31 @@ def run(
         ):
             raise SmokeFailure("mupaw_project_apply_edits schema omitted M1b properties")
         tool_schema_check["m1bApplyEditProperties"] = sorted(required_edit_properties)
+        commands_schema = apply_properties.get("commands")
+        command_items = commands_schema.get("items") if isinstance(commands_schema, dict) else None
+        command_properties = (
+            command_items.get("properties") if isinstance(command_items, dict) else None
+        )
+        required_style_command_properties = {"style", "preset"}
+        if not isinstance(command_properties, dict) or not required_style_command_properties.issubset(
+            command_properties
+        ):
+            raise SmokeFailure("mupaw_project_apply_edits schema omitted M1d style properties")
+        command_type = command_properties.get("type")
+        command_type_enum = command_type.get("enum") if isinstance(command_type, dict) else None
+        required_style_commands = {
+            "set_visual_style",
+            "apply_style_preset",
+            "clear_visual_style",
+        }
+        if not isinstance(command_type_enum, list) or not required_style_commands.issubset(
+            set(value for value in command_type_enum if isinstance(value, str))
+        ):
+            raise SmokeFailure("mupaw_project_apply_edits schema omitted M1d style commands")
+        tool_schema_check["m1dStyleCommandProperties"] = sorted(
+            required_style_command_properties
+        )
+        tool_schema_check["m1dStyleCommands"] = sorted(required_style_commands)
 
         ocr_tool = next(
             (
@@ -631,6 +656,7 @@ def run(
                 "screenshot-editing",
                 "ocr",
                 "color-sampling",
+                "visual-style",
             }
             missing_available = expected_available - available_ids
             if missing_available:

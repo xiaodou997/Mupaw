@@ -135,7 +135,7 @@ internal enum MupawToolCatalog {
         Tool(
             name: "mupaw_project_apply_edits",
             description:
-                "Atomically apply one or more crop, arrow, text, mosaic, update, delete, or reset commands to a screenshot project. Coordinates use original-image pixels with a top-left origin. expected_revision is required for optimistic concurrency.",
+                "Atomically apply crop, annotation, visual-style, preset, clear-style, or reset commands to a screenshot project. Coordinates use original-image pixels with a top-left origin. Visual styling is non-destructive and uses the same renderer for preview and export. expected_revision is required for optimistic concurrency.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -406,6 +406,110 @@ internal enum MupawToolCatalog {
         "additionalProperties": .bool(false),
     ])
 
+    private static let shadowStyleSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "is_enabled": .object(["type": .string("boolean")]),
+            "color": colorSchema,
+            "blur_radius": .object([
+                "type": .string("number"),
+                "minimum": .int(0),
+                "maximum": .int(256),
+            ]),
+            "offset_x": .object([
+                "type": .string("number"),
+                "minimum": .int(-512),
+                "maximum": .int(512),
+            ]),
+            "offset_y": .object([
+                "type": .string("number"),
+                "minimum": .int(-512),
+                "maximum": .int(512),
+            ]),
+        ]),
+        "required": .array([
+            .string("is_enabled"),
+            .string("color"),
+            .string("blur_radius"),
+            .string("offset_x"),
+            .string("offset_y"),
+        ]),
+        "additionalProperties": .bool(false),
+    ])
+
+    private static let backgroundStyleSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "mode": .object([
+                "type": .string("string"),
+                "enum": .array([.string("solid"), .string("linear_gradient")]),
+            ]),
+            "start_color": colorSchema,
+            "end_color": colorSchema,
+            "angle_degrees": .object([
+                "type": .string("number"),
+                "minimum": .int(-3_600),
+                "maximum": .int(3_600),
+            ]),
+        ]),
+        "required": .array([
+            .string("mode"),
+            .string("start_color"),
+            .string("end_color"),
+            .string("angle_degrees"),
+        ]),
+        "additionalProperties": .bool(false),
+    ])
+
+    private static let visualStyleSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "background": backgroundStyleSchema,
+            "padding": .object([
+                "type": .string("number"),
+                "minimum": .int(0),
+                "maximum": .int(2_048),
+            ]),
+            "corner_radius": .object([
+                "type": .string("number"),
+                "minimum": .int(0),
+                "maximum": .int(512),
+            ]),
+            "shadow": shadowStyleSchema,
+            "canvas_aspect": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("automatic"),
+                    .string("square"),
+                    .string("landscape_4_3"),
+                    .string("landscape_16_9"),
+                    .string("portrait_3_4"),
+                    .string("portrait_9_16"),
+                ]),
+            ]),
+        ]),
+        "required": .array([
+            .string("background"),
+            .string("padding"),
+            .string("corner_radius"),
+            .string("shadow"),
+            .string("canvas_aspect"),
+        ]),
+        "additionalProperties": .bool(false),
+    ])
+
+    private static let stylePresetSchema: Value = .object([
+        "type": .string("string"),
+        "enum": .array([
+            .string("none"),
+            .string("clean_white"),
+            .string("soft_gray"),
+            .string("ocean"),
+            .string("sunset"),
+            .string("midnight"),
+        ]),
+    ])
+
     private static let editCommandSchema: Value = .object([
         "type": .string("object"),
         "properties": .object([
@@ -416,6 +520,9 @@ internal enum MupawToolCatalog {
                     .string("add_object"),
                     .string("update_object"),
                     .string("delete_object"),
+                    .string("set_visual_style"),
+                    .string("apply_style_preset"),
+                    .string("clear_visual_style"),
                     .string("reset"),
                 ]),
             ]),
@@ -427,6 +534,8 @@ internal enum MupawToolCatalog {
             ]),
             "object": editObjectSchema,
             "object_id": .object(["type": .string("string")]),
+            "style": visualStyleSchema,
+            "preset": stylePresetSchema,
         ]),
         "required": .array([.string("type")]),
         "additionalProperties": .bool(false),

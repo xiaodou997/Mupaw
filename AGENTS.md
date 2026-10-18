@@ -35,6 +35,15 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 - Keep project and export files owner-only. Project creation must verify that the source belongs to Mupaw's capture directory and that its SHA-256 matches.
 - Prefer deterministic Core Graphics CPU rendering for the editing foundation. Introduce GPU/Core Image paths only with a real-device crash and output-equivalence gate.
 
+## Screenshot visual-style rules
+
+- Visual styling is project state, not a destructive image rewrite. Legacy projects without style data must render exactly as before.
+- The canonical render order is crop and annotations, rounded screenshot card, shadow, then background canvas.
+- Solid and linear-gradient backgrounds, padding, aspect-ratio expansion, corner radius, and shadow parameters must remain bounded and deterministic.
+- Style presets are ordinary structured parameter sets. Applying a preset creates a normal revision and users or Agents may modify every field afterward.
+- UI preview, MCP preview, and PNG export must render style through the same `ScreenshotRenderer`; never approximate final output with a separate production renderer.
+- The editor maps object, OCR, and color coordinates to the screenshot card inside the styled output canvas. Background pixels are not original-image coordinates.
+
 ## Screenshot analysis rules
 
 - OCR and color sampling operate on the immutable copied original. The current crop is only the default analysis region; annotations must not silently alter analysis input.

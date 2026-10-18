@@ -330,10 +330,29 @@ public enum ScreenshotEditObject: Codable, Sendable, Equatable, Identifiable {
 public struct ScreenshotProjectContent: Codable, Sendable, Equatable {
     public let cropRect: ImagePixelRect?
     public let objects: [ScreenshotEditObject]
+    public let visualStyle: ScreenshotVisualStyle?
 
-    public init(cropRect: ImagePixelRect? = nil, objects: [ScreenshotEditObject] = []) {
+    public init(
+        cropRect: ImagePixelRect? = nil,
+        objects: [ScreenshotEditObject] = [],
+        visualStyle: ScreenshotVisualStyle? = nil
+    ) {
         self.cropRect = cropRect
         self.objects = objects
+        self.visualStyle = visualStyle
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cropRect
+        case objects
+        case visualStyle
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cropRect = try container.decodeIfPresent(ImagePixelRect.self, forKey: .cropRect)
+        objects = try container.decodeIfPresent([ScreenshotEditObject].self, forKey: .objects) ?? []
+        visualStyle = try container.decodeIfPresent(ScreenshotVisualStyle.self, forKey: .visualStyle)
     }
 
     public static let empty = ScreenshotProjectContent()
@@ -399,6 +418,24 @@ public struct ScreenshotProjectState: Codable, Sendable, Equatable, Identifiable
     public var visibleBounds: ImagePixelRect {
         content.cropRect?.standardized ?? originalBounds
     }
+
+    public var renderedContentPixelWidth: Int {
+        let bounds = visibleBounds.standardized
+        return max(1, Int(ceil(bounds.maxX) - floor(bounds.minX)))
+    }
+
+    public var renderedContentPixelHeight: Int {
+        let bounds = visibleBounds.standardized
+        return max(1, Int(ceil(bounds.maxY) - floor(bounds.minY)))
+    }
+
+    public var visualLayout: ScreenshotVisualLayout? {
+        try? ScreenshotStyleLayoutPlanner.makeLayout(
+            contentPixelWidth: renderedContentPixelWidth,
+            contentPixelHeight: renderedContentPixelHeight,
+            style: content.visualStyle
+        )
+    }
 }
 
 public struct ProjectCreateRequest: Codable, Sendable, Equatable {
@@ -444,6 +481,9 @@ public enum ProjectEditCommand: Codable, Sendable, Equatable {
     case addObject(ScreenshotEditObject)
     case updateObject(ScreenshotEditObject)
     case deleteObject(String)
+    case setVisualStyle(ScreenshotVisualStyle)
+    case applyStylePreset(ScreenshotStylePreset)
+    case clearVisualStyle
     case reset
 
     public enum Kind: String, Codable, Sendable {
@@ -451,6 +491,9 @@ public enum ProjectEditCommand: Codable, Sendable, Equatable {
         case addObject = "add_object"
         case updateObject = "update_object"
         case deleteObject = "delete_object"
+        case setVisualStyle = "set_visual_style"
+        case applyStylePreset = "apply_style_preset"
+        case clearVisualStyle = "clear_visual_style"
         case reset
     }
 
@@ -459,6 +502,8 @@ public enum ProjectEditCommand: Codable, Sendable, Equatable {
         case rect
         case object
         case objectID = "object_id"
+        case style
+        case preset
     }
 
     public var kind: Kind {
@@ -467,6 +512,9 @@ public enum ProjectEditCommand: Codable, Sendable, Equatable {
         case .addObject: .addObject
         case .updateObject: .updateObject
         case .deleteObject: .deleteObject
+        case .setVisualStyle: .setVisualStyle
+        case .applyStylePreset: .applyStylePreset
+        case .clearVisualStyle: .clearVisualStyle
         case .reset: .reset
         }
     }
@@ -491,6 +539,12 @@ public enum ProjectEditCommand: Codable, Sendable, Equatable {
             self = .updateObject(try container.decode(ScreenshotEditObject.self, forKey: .object))
         case .deleteObject:
             self = .deleteObject(try container.decode(String.self, forKey: .objectID))
+        case .setVisualStyle:
+            self = .setVisualStyle(try container.decode(ScreenshotVisualStyle.self, forKey: .style))
+        case .applyStylePreset:
+            self = .applyStylePreset(try container.decode(ScreenshotStylePreset.self, forKey: .preset))
+        case .clearVisualStyle:
+            self = .clearVisualStyle
         case .reset:
             self = .reset
         }
@@ -510,7 +564,11 @@ public enum ProjectEditCommand: Codable, Sendable, Equatable {
             try container.encode(object, forKey: .object)
         case .deleteObject(let objectID):
             try container.encode(objectID, forKey: .objectID)
-        case .reset:
+        case .setVisualStyle(let style):
+            try container.encode(style, forKey: .style)
+        case .applyStylePreset(let preset):
+            try container.encode(preset, forKey: .preset)
+        case .clearVisualStyle, .reset:
             break
         }
     }

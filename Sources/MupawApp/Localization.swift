@@ -63,6 +63,49 @@ enum L10n {
         return Locale.current.localizedString(forLanguageCode: identifier) ?? identifier
     }
 
+    static func stylePreset(_ preset: ScreenshotStylePreset) -> String {
+        switch preset {
+        case .none:
+            return string("editor.style.preset.none")
+        case .cleanWhite:
+            return string("editor.style.preset.clean_white")
+        case .softGray:
+            return string("editor.style.preset.soft_gray")
+        case .ocean:
+            return string("editor.style.preset.ocean")
+        case .sunset:
+            return string("editor.style.preset.sunset")
+        case .midnight:
+            return string("editor.style.preset.midnight")
+        }
+    }
+
+    static func canvasAspect(_ aspect: ScreenshotCanvasAspect) -> String {
+        switch aspect {
+        case .automatic:
+            return string("editor.style.aspect.automatic")
+        case .square:
+            return string("editor.style.aspect.square")
+        case .landscapeFourThree:
+            return string("editor.style.aspect.landscape_4_3")
+        case .landscapeSixteenNine:
+            return string("editor.style.aspect.landscape_16_9")
+        case .portraitThreeFour:
+            return string("editor.style.aspect.portrait_3_4")
+        case .portraitNineSixteen:
+            return string("editor.style.aspect.portrait_9_16")
+        }
+    }
+
+    static func backgroundMode(_ mode: ScreenshotBackgroundMode) -> String {
+        switch mode {
+        case .solid:
+            return string("editor.style.background.solid")
+        case .linearGradient:
+            return string("editor.style.background.gradient")
+        }
+    }
+
     static func editKind(_ kind: ScreenshotEditKind) -> String {
         switch kind {
         case .arrow:

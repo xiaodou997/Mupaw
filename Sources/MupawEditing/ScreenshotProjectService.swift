@@ -316,6 +316,7 @@ public actor ScreenshotProjectService {
     ) throws -> ScreenshotProjectContent {
         var cropRect = content.cropRect
         var objects = content.objects
+        var visualStyle = content.visualStyle
 
         switch command {
         case .setCrop(let rect):
@@ -353,12 +354,23 @@ public actor ScreenshotProjectService {
                 )
             }
             objects.remove(at: index)
+        case .setVisualStyle(let style):
+            visualStyle = style
+        case .applyStylePreset(let preset):
+            visualStyle = preset.style
+        case .clearVisualStyle:
+            visualStyle = nil
         case .reset:
             cropRect = nil
             objects.removeAll()
+            visualStyle = nil
         }
 
-        return ScreenshotProjectContent(cropRect: cropRect, objects: objects)
+        return ScreenshotProjectContent(
+            cropRect: cropRect,
+            objects: objects,
+            visualStyle: visualStyle
+        )
     }
 
     private func validate(
@@ -378,6 +390,55 @@ public actor ScreenshotProjectService {
                     EditingL10n.string(
                         "editing.detail.invalid_crop",
                         fallback: "The crop must be a finite rectangle fully inside the source image."
+                    )
+                )
+            }
+        }
+        if let style = content.visualStyle {
+            guard style.background.startColor.isFiniteAndNormalized,
+                style.background.endColor.isFiniteAndNormalized,
+                style.background.angleDegrees.isFinite,
+                abs(style.background.angleDegrees)
+                    <= MupawConstants.maximumStyleGradientAngleMagnitude,
+                style.padding.isFinite,
+                style.padding >= 0,
+                style.padding <= MupawConstants.maximumStylePadding,
+                style.cornerRadius.isFinite,
+                style.cornerRadius >= 0,
+                style.cornerRadius <= MupawConstants.maximumStyleCornerRadius,
+                style.shadow.color.isFiniteAndNormalized,
+                style.shadow.blurRadius.isFinite,
+                style.shadow.blurRadius >= 0,
+                style.shadow.blurRadius <= MupawConstants.maximumStyleShadowBlurRadius,
+                style.shadow.offsetX.isFinite,
+                abs(style.shadow.offsetX) <= MupawConstants.maximumStyleShadowOffset,
+                style.shadow.offsetY.isFinite,
+                abs(style.shadow.offsetY) <= MupawConstants.maximumStyleShadowOffset
+            else {
+                throw ScreenshotProjectServiceError.invalidEdit(
+                    EditingL10n.string(
+                        "editing.detail.invalid_visual_style",
+                        fallback: "The background, padding, corner, shadow, or canvas style is invalid."
+                    )
+                )
+            }
+
+            let visible = content.cropRect?.standardized ?? bounds
+            let contentWidth = max(1, Int(ceil(visible.maxX) - floor(visible.minX)))
+            let contentHeight = max(1, Int(ceil(visible.maxY) - floor(visible.minY)))
+            do {
+                _ = try ScreenshotStyleLayoutPlanner.makeLayout(
+                    contentPixelWidth: contentWidth,
+                    contentPixelHeight: contentHeight,
+                    style: style
+                )
+            } catch ScreenshotStyleLayoutPlanningError.outputTooLarge {
+                throw ScreenshotProjectServiceError.canvasTooLarge
+            } catch {
+                throw ScreenshotProjectServiceError.invalidEdit(
+                    EditingL10n.string(
+                        "editing.detail.invalid_visual_style",
+                        fallback: "The background, padding, corner, shadow, or canvas style is invalid."
                     )
                 )
             }

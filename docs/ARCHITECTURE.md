@@ -20,7 +20,7 @@ Mupaw.app
     ├── ScreenCaptureKit full-screen/window/region capture service
     ├── multi-display region planner and compositor
     ├── versioned screenshot project service
-    ├── shared edit renderer and history service
+    ├── shared edit, visual-style renderer, and history service
     ├── Vision OCR and bounded sRGB color analyzer
     └── capture, project, and export stores
 ```
@@ -35,7 +35,7 @@ Pure shared types and local transport support:
 
 - capability and permission models;
 - explicit screenshot modes and global point/pixel geometry;
-- source, artifact, project, edit-command, OCR, color-sampling, preview, and export descriptors;
+- source, artifact, project, edit-command, visual-style, OCR, color-sampling, preview, and export descriptors;
 - original-image pixel geometry for crop and annotation objects;
 - deterministic multi-display region planning;
 - RPC request/response envelopes;
@@ -66,13 +66,14 @@ Application-owned non-destructive editing services:
 - bounded JPEG previews and owner-only PNG exports with SHA-256 metadata.
 - local Vision text recognition with bounded original-image pixel observations;
 - deterministic point/region color analysis in normalized sRGB with bounded sampling.
+- deterministic visual-style layout planning and Core Graphics background/card/shadow composition.
 
 ### Mupaw.app
 
 - SwiftUI application shell with explicit screenshot modes;
 - AppKit multi-display region-selection overlay with `Esc`/right-click cancellation;
 - Carbon global shortcuts with visible conflict state;
-- screenshot editor canvas, layer list, object inspector, crop sheet, OCR overlays, and color-sampling controls;
+- screenshot editor canvas, layer list, object inspector, crop and beautification sheets, OCR overlays, and color-sampling controls;
 - lifecycle for the local RPC listener;
 - routing UI and RPC requests to the same capture, editing, and analysis services;
 - capture, project, OCR, color, preview, and export presentation.
@@ -80,9 +81,9 @@ Application-owned non-destructive editing services:
 ### mupaw-mcp
 
 - official Swift MCP SDK over stdio;
-- a small, stable capture, editing, OCR, and color-analysis tool catalog;
+- a small, stable capture, editing, visual-style, OCR, and color-analysis tool catalog;
 - conversion between MCP values and Mupaw RPC values;
-- structured project creation, batch edits, history, OCR, color sampling, preview, and export;
+- structured project creation, batch edits and style presets, history, OCR, color sampling, preview, and export;
 - actionable errors for unavailable apps, permissions, stale revisions, invalid edits/analysis, and missing artifacts.
 
 ## M1a screenshot contract
@@ -123,6 +124,18 @@ OCR and color sampling read the verified copied original and never mutate the pr
 
 Both human UI and MCP call `ScreenshotProjectService`. Analysis accepts an optional `expected_revision` to detect stale context but never creates a new revision. Project get, OCR, color sampling, preview, and export first revalidate the copied original's SHA-256 and dimensions.
 
+## M1d screenshot visual-style contract
+
+Visual style is optional revisioned project content. Project schema version 1 remains readable because a missing `visualStyle` field decodes as `nil`; the unstyled renderer returns the same crop-and-annotation image as M1b/M1c. Styling never rewrites the copied original or annotation coordinates.
+
+The style model contains a solid or two-color linear-gradient background, bounded canvas padding, one of six output aspect choices, screenshot-card corner radius, and an optional bounded shadow with color, blur, and offsets. Built-in presets (`none`, `clean_white`, `soft_gray`, `ocean`, `sunset`, and `midnight`) are only structured parameter sets and may be replaced by a fully custom style.
+
+`ScreenshotStyleLayoutPlanner` computes one deterministic output canvas and a top-left pixel card frame. It reserves padding and the full bounded shadow footprint, expands the canvas rather than cropping when an aspect ratio is requested, centers the composition, and rejects allocations above the global screenshot pixel limit.
+
+`ScreenshotRenderer` uses the canonical order: source crop and annotations, rounded alpha card, Core Graphics shadow, then solid/gradient background canvas. Preview and export consume the exact same final `CGImage`. The UI maps object, OCR, and color coordinates through the card frame inside the styled output; background pixels do not map to original-image coordinates.
+
+`set_visual_style`, `apply_style_preset`, and `clear_visual_style` are normal `project_apply_edits` commands. They require the current revision, participate in atomic batches and persisted undo/redo, and `reset` clears style together with crop and edit objects. Invalid style geometry, colors, shadow values, or output allocations reject the whole batch.
+
 ## Local RPC security
 
 - bind only to loopback;
@@ -148,7 +161,8 @@ The deterministic codec tests cover malformed structures and oversized-response 
 - M1a: explicit full-screen/window/region capture, native selection overlay, global shortcuts, structured Agent regions — complete.
 - M1b: non-destructive crop, arrow, text, mosaic, history, shared preview/export, and Agent editing tools — complete.
 - M1c: Apple Vision OCR, point color picking, bounded region color summaries, UI overlays, and Agent analysis tools — complete.
-- M1d+: visual styling and base MP4 remain planned.
-- M2: scrolling capture, background/rounded-corner/shadow styling, GIF.
+- M1d: non-destructive backgrounds, aspect canvases, padding, rounded cards, shadows, editable presets, and Agent style commands — complete.
+- M1e: base MP4 recording remains planned.
+- M2: scrolling capture, partial-result stitching, and GIF.
 - M3: system audio, microphone, camera overlay, click and keystroke events, manual zoom timeline.
 - M4: automatic focus/zoom suggestions and editable super-recording workflow.

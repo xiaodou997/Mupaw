@@ -11,6 +11,15 @@ struct ScreenshotRenderer: Sendable {
         record: StoredScreenshotProject,
         originalURL: URL
     ) throws -> CGImage {
+        let contentImage = try renderContent(record: record, originalURL: originalURL)
+        guard let style = record.content.visualStyle else { return contentImage }
+        return try renderStyled(contentImage: contentImage, style: style)
+    }
+
+    private func renderContent(
+        record: StoredScreenshotProject,
+        originalURL: URL
+    ) throws -> CGImage {
         guard let source = CGImageSourceCreateWithURL(originalURL as CFURL, nil),
             let original = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else {
@@ -99,6 +108,178 @@ struct ScreenshotRenderer: Sendable {
             )
         }
         return image
+    }
+
+    private func renderStyled(
+        contentImage: CGImage,
+        style: ScreenshotVisualStyle
+    ) throws -> CGImage {
+        let layout: ScreenshotVisualLayout
+        do {
+            layout = try ScreenshotStyleLayoutPlanner.makeLayout(
+                contentPixelWidth: contentImage.width,
+                contentPixelHeight: contentImage.height,
+                style: style
+            )
+        } catch ScreenshotStyleLayoutPlanningError.outputTooLarge {
+            throw ScreenshotProjectServiceError.canvasTooLarge
+        } catch {
+            throw ScreenshotProjectServiceError.invalidEdit(
+                EditingL10n.string(
+                    "editing.detail.invalid_visual_style",
+                    fallback: "The background, padding, corner, shadow, or canvas style is invalid."
+                )
+            )
+        }
+        try ScreenshotProjectStore.validateCanvas(
+            width: layout.outputPixelWidth,
+            height: layout.outputPixelHeight
+        )
+
+        guard
+            let context = CGContext(
+                data: nil,
+                width: layout.outputPixelWidth,
+                height: layout.outputPixelHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else {
+            throw ScreenshotProjectServiceError.renderFailed(
+                EditingL10n.string(
+                    "editing.detail.style_context_failed",
+                    fallback: "The styled output canvas could not be created."
+                )
+            )
+        }
+
+        let canvas = CGRect(
+            x: 0,
+            y: 0,
+            width: layout.outputPixelWidth,
+            height: layout.outputPixelHeight
+        )
+        context.clear(canvas)
+        fillBackground(style.background, in: canvas, context: context)
+
+        let radius = min(
+            max(0, style.cornerRadius),
+            Double(min(contentImage.width, contentImage.height)) / 2
+        )
+        let card = try roundedCardImage(contentImage, radius: radius)
+        let frame = layout.cardFrame.standardized
+        let drawRect = CGRect(
+            x: frame.minX,
+            y: Double(layout.outputPixelHeight) - frame.maxY,
+            width: frame.width,
+            height: frame.height
+        )
+
+        context.saveGState()
+        if style.shadow.isEnabled, style.shadow.color.alpha > 0 {
+            context.setShadow(
+                offset: CGSize(width: style.shadow.offsetX, height: -style.shadow.offsetY),
+                blur: style.shadow.blurRadius,
+                color: cgColor(style.shadow.color)
+            )
+        }
+        context.interpolationQuality = .high
+        context.draw(card, in: drawRect)
+        context.restoreGState()
+
+        guard let image = context.makeImage() else {
+            throw ScreenshotProjectServiceError.renderFailed(
+                EditingL10n.string(
+                    "editing.detail.style_image_failed",
+                    fallback: "The styled screenshot could not be created."
+                )
+            )
+        }
+        return image
+    }
+
+    private func roundedCardImage(_ image: CGImage, radius: Double) throws -> CGImage {
+        guard
+            let context = CGContext(
+                data: nil,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else {
+            throw ScreenshotProjectServiceError.renderFailed(
+                EditingL10n.string(
+                    "editing.detail.style_card_context_failed",
+                    fallback: "The rounded screenshot card could not be created."
+                )
+            )
+        }
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.clear(bounds)
+        let path = CGPath(
+            roundedRect: bounds,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
+        context.addPath(path)
+        context.clip()
+        context.interpolationQuality = .high
+        context.draw(image, in: bounds)
+        guard let card = context.makeImage() else {
+            throw ScreenshotProjectServiceError.renderFailed(
+                EditingL10n.string(
+                    "editing.detail.style_card_image_failed",
+                    fallback: "The rounded screenshot card image could not be created."
+                )
+            )
+        }
+        return card
+    }
+
+    private func fillBackground(
+        _ background: ScreenshotBackgroundStyle,
+        in rect: CGRect,
+        context: CGContext
+    ) {
+        switch background.mode {
+        case .solid:
+            context.setFillColor(cgColor(background.startColor))
+            context.fill(rect)
+        case .linearGradient:
+            let colors = [cgColor(background.startColor), cgColor(background.endColor)] as CFArray
+            guard
+                let gradient = CGGradient(
+                    colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)
+                        ?? CGColorSpaceCreateDeviceRGB(),
+                    colors: colors,
+                    locations: [0, 1]
+                )
+            else {
+                context.setFillColor(cgColor(background.startColor))
+                context.fill(rect)
+                return
+            }
+            let radians = background.angleDegrees * .pi / 180
+            let vectorX = cos(radians)
+            let vectorY = -sin(radians)
+            let distance = abs(vectorX) * rect.width / 2 + abs(vectorY) * rect.height / 2
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let start = CGPoint(
+                x: center.x - vectorX * distance,
+                y: center.y - vectorY * distance
+            )
+            let end = CGPoint(
+                x: center.x + vectorX * distance,
+                y: center.y + vectorY * distance
+            )
+            context.drawLinearGradient(gradient, start: start, end: end, options: [])
+        }
     }
 
     func preview(

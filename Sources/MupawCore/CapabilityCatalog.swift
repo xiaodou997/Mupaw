@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, capture, versioned screenshot projects, structured edits, OCR, color sampling, preview, history, and PNG export to a local Agent."
+                        "Exposes status, capture, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and PNG export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -57,9 +57,10 @@ public enum CapabilityCatalog {
                 ),
                 .init(
                     id: "visual-style",
-                    title: "Background, rounded-corner, and shadow styling",
-                    availability: .planned,
-                    detail: "Visual styling remains planned for M2."
+                    title: "Background, canvas, rounded-corner, and shadow styling",
+                    availability: .available,
+                    detail:
+                        "Applies non-destructive presets or custom solid/gradient backgrounds, padding, output aspect ratios, rounded corners, and bounded shadows through the shared preview/export renderer."
                 ),
                 .init(
                     id: "scrolling-capture",

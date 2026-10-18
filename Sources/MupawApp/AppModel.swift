@@ -270,6 +270,18 @@ final class AppModel {
         await applyActiveProjectCommands([.setCrop(rect)], selectAfter: nil)
     }
 
+    func setVisualStyle(_ style: ScreenshotVisualStyle) async {
+        await applyActiveProjectCommands([.setVisualStyle(style)], selectAfter: nil)
+    }
+
+    func applyStylePreset(_ preset: ScreenshotStylePreset) async {
+        await applyActiveProjectCommands([.applyStylePreset(preset)], selectAfter: nil)
+    }
+
+    func clearVisualStyle() async {
+        await applyActiveProjectCommands([.clearVisualStyle], selectAfter: nil)
+    }
+
     func resetActiveProject() async {
         await applyActiveProjectCommands([.reset], selectAfter: nil)
     }

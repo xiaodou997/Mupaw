@@ -25,6 +25,11 @@ public enum MupawConstants {
     public static let maximumEditorFontSize = 512.0
     public static let minimumMosaicBlockSize = 2.0
     public static let maximumMosaicBlockSize = 256.0
+    public static let maximumStylePadding = 2_048.0
+    public static let maximumStyleCornerRadius = 512.0
+    public static let maximumStyleShadowBlurRadius = 256.0
+    public static let maximumStyleShadowOffset = 512.0
+    public static let maximumStyleGradientAngleMagnitude = 3_600.0
     public static let maximumOCRLanguages = 8
     public static let maximumOCRLanguageTagUTF8Bytes = 64
     public static let maximumOCRObservations = 512

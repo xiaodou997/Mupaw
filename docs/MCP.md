@@ -1,6 +1,6 @@
-# Mupaw MCP contract — M0 through M1c
+# Mupaw MCP contract — M0 through M1d
 
-The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards capture, editing, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures independently, reads arbitrary source files, or drives Mupaw's UI.
+The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards capture, editing, visual styling, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures independently, reads arbitrary source files, or drives Mupaw's UI.
 
 ## Discovery and capture tools
 
@@ -10,7 +10,7 @@ Returns whether the app responds, app and protocol versions, process ID, and rel
 
 ### `mupaw_capabilities_get`
 
-Returns the implemented and planned capability matrix. M1c reports `source-enumeration`, `screenshot`, `region-capture`, `screenshot-editing`, `ocr`, `color-sampling`, and `agent-mcp` as available.
+Returns the implemented and planned capability matrix. M1d reports `source-enumeration`, `screenshot`, `region-capture`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available.
 
 ### `mupaw_sources_list`
 
@@ -66,7 +66,7 @@ Project get, OCR, color sampling, preview, and export verify that the copied ori
 }
 ```
 
-Returns current revision, original metadata, crop, ordered edit objects, timestamps, and undo/redo availability.
+Returns current revision, original metadata, crop, ordered edit objects, optional `visualStyle`, timestamps, and undo/redo availability. Legacy projects without the field decode as unstyled.
 
 ### `mupaw_project_apply_edits`
 
@@ -108,7 +108,10 @@ Supported commands:
 - `add_object`: include a tagged `object`;
 - `update_object`: include the full replacement object with the existing object ID;
 - `delete_object`: include `object_id`;
-- `reset`: clears crop and all objects.
+- `set_visual_style`: include a complete `style` object;
+- `apply_style_preset`: include `preset` as `none`, `clean_white`, `soft_gray`, `ocean`, `sunset`, or `midnight`;
+- `clear_visual_style`: removes styling while preserving crop and objects;
+- `reset`: clears crop, all objects, and visual style.
 
 Tagged object payloads:
 
@@ -136,6 +139,34 @@ Tagged object payloads:
 }
 ```
 
+Visual-style command example:
+
+```json
+{
+  "type": "set_visual_style",
+  "style": {
+    "background": {
+      "mode": "linear_gradient",
+      "start_color": {"red": 0.12, "green": 0.42, "blue": 0.96, "alpha": 1.0},
+      "end_color": {"red": 0.13, "green": 0.84, "blue": 0.70, "alpha": 1.0},
+      "angle_degrees": 35
+    },
+    "padding": 80,
+    "corner_radius": 40,
+    "shadow": {
+      "is_enabled": true,
+      "color": {"red": 0.01, "green": 0.04, "blue": 0.12, "alpha": 0.38},
+      "blur_radius": 30,
+      "offset_x": 8,
+      "offset_y": 18
+    },
+    "canvas_aspect": "square"
+  }
+}
+```
+
+`background.mode` is `solid` or `linear_gradient`. Canvas aspect is `automatic`, `square`, `landscape_4_3`, `landscape_16_9`, `portrait_3_4`, or `portrait_9_16`. Style values and final allocations are bounded. Presets are editable parameter sets rather than opaque themes.
+
 A batch either validates and persists completely as one new revision, or leaves the project unchanged.
 
 ### `mupaw_project_history`
@@ -159,7 +190,7 @@ A batch either validates and persists completely as one new revision, or leaves 
 }
 ```
 
-Renders the project through the same renderer used for export. Returns output dimensions, revision, bounded JPEG preview metadata, and one MCP image content block. `expected_revision` is optional but recommended.
+Renders the project through the same renderer used for export. For styled projects the order is crop/annotations, rounded card, shadow, then background canvas. Returns actual output dimensions, revision, bounded JPEG preview metadata, and one MCP image content block. `expected_revision` is optional but recommended.
 
 ### `mupaw_project_ocr`
 
@@ -229,7 +260,7 @@ Each sampled color includes normalized `rgba`, uppercase `hexRGB` and `hexRGBA`,
 }
 ```
 
-Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project revision, file URL, actual dimensions, bytes, SHA-256, and the preview generated from the same rendered image. Export never overwrites the original capture or project document.
+Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project revision, file URL, actual styled or unstyled dimensions, bytes, SHA-256, and the preview generated from the same rendered image. Export never overwrites the original capture or project document.
 
 ## Concurrency and errors
 
@@ -259,12 +290,15 @@ make mcp-negative-smoke
 make mcp-smoke-capture
 make m1b-smoke
 make m1c-smoke
+make m1d-smoke
 make rpc-negative-smoke
-make m1c-acceptance
+make m1d-acceptance
 ```
 
 `make m1b-smoke` performs a real capture, project creation, atomic crop/arrow/text/mosaic batches, update/delete/add, stale-revision and invalid-edit checks, undo, redo, reset, restore, preview, export, file/hash/dimension validation, and original-image immutability verification.
 
 `make m1c-smoke` performs a real Mupaw-window capture, project creation, local OCR with engine/language reporting, point and region color sampling, result-bound/coordinate/color validation, invalid-input and stale-revision checks, and proof that analysis does not change the project revision, project document, or copied original.
+
+`make m1d-smoke` performs a real capture and project creation, applies an editable preset and a fully custom gradient/square style, validates deterministic preview/export dimensions and hashes, rejects an invalid atomic style batch, exercises undo/redo/clear/none-preset behavior, and proves the copied original remains unchanged.
 
 `make mcp-smoke-full-screen` remains separate because it records the current display. Cover the display with non-sensitive test content first. For UI/MCP capture ownership, start interactive region selection and run `make mcp-capture-conflict-smoke`.

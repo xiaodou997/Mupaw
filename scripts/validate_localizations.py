@@ -26,6 +26,9 @@ REQUIRED_LOCALIZABLE_KEYS = {
     "capture.region.instructions",
     "capture.error.invalid_region",
     "shortcut.status.conflict",
+    "editor.tool.style",
+    "editor.style.preset.ocean",
+    "editing.detail.invalid_visual_style",
 }
 REQUIRED_INFO_KEYS = {
     "NSCameraUsageDescription",
