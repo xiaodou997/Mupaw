@@ -39,6 +39,8 @@ public enum AgentRPCErrorCode: String, Codable, Sendable {
     case unknownMethod = "unknown_method"
     case permissionRequired = "permission_required"
     case sourceNotFound = "source_not_found"
+    case invalidRegion = "invalid_region"
+    case captureInProgress = "capture_in_progress"
     case captureFailed = "capture_failed"
     case frameTooLarge = "frame_too_large"
     case internalError = "internal_error"

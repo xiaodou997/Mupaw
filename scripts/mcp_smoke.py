@@ -162,31 +162,29 @@ def image_content(tool_result: dict[str, Any], tool_name: str) -> dict[str, Any]
     return image
 
 
-def capture_and_validate(
-    process: subprocess.Popen[bytes],
-    request_id: int,
-    source: dict[str, Any],
+def validate_artifact(
+    tool_result: dict[str, Any],
+    *,
+    expected_source_id: str | None = None,
+    expected_source_kind: str | None = None,
 ) -> dict[str, Any]:
-    source_id = source.get("id")
-    source_kind = source.get("kind")
-    if not isinstance(source_id, str) or not isinstance(source_kind, str):
-        raise SmokeFailure("Selected capture source is missing id or kind")
-
-    result = call_tool(
-        process,
-        request_id,
-        "mupaw_screenshot_capture",
-        {
-            "source_id": source_id,
-            "format": "png",
-            "include_cursor": False,
-            "file_name": "Mupaw-MCP-Smoke",
-        },
-    )
-    artifact = parse_json_result(result, "mupaw_screenshot_capture")
+    tool_name = "mupaw_screenshot_capture"
+    artifact = parse_json_result(tool_result, tool_name)
     artifact_source = artifact.get("source")
-    if not isinstance(artifact_source, dict) or artifact_source.get("id") != source_id:
-        raise SmokeFailure("Screenshot artifact source does not match the requested source")
+    if not isinstance(artifact_source, dict):
+        raise SmokeFailure("Screenshot artifact omitted its source descriptor")
+    source_id = artifact_source.get("id")
+    source_kind = artifact_source.get("kind")
+    if not isinstance(source_id, str) or not isinstance(source_kind, str):
+        raise SmokeFailure("Screenshot artifact source is missing id or kind")
+    if expected_source_id is not None and source_id != expected_source_id:
+        raise SmokeFailure(
+            f"Screenshot artifact source mismatch: expected={expected_source_id!r}, actual={source_id!r}"
+        )
+    if expected_source_kind is not None and source_kind != expected_source_kind:
+        raise SmokeFailure(
+            f"Screenshot artifact kind mismatch: expected={expected_source_kind!r}, actual={source_kind!r}"
+        )
 
     pixel_width = artifact.get("pixelWidth")
     pixel_height = artifact.get("pixelHeight")
@@ -229,7 +227,7 @@ def capture_and_validate(
             f"Screenshot SHA-256 mismatch: metadata={expected_sha256}, file={actual_sha256}"
         )
 
-    image = image_content(result, "mupaw_screenshot_capture")
+    image = image_content(tool_result, tool_name)
     preview = artifact.get("preview")
     if not isinstance(preview, dict):
         raise SmokeFailure("Screenshot artifact omitted preview metadata")
@@ -239,6 +237,7 @@ def capture_and_validate(
         raise SmokeFailure("MCP image block does not match artifact preview metadata")
 
     return {
+        "artifactID": artifact.get("id"),
         "sourceID": source_id,
         "sourceKind": source_kind,
         "file": str(file_path),
@@ -248,6 +247,86 @@ def capture_and_validate(
         "sha256": expected_sha256,
         "previewMimeType": preview_mime_type,
     }
+
+
+def capture_source_and_validate(
+    process: subprocess.Popen[bytes],
+    request_id: int,
+    source: dict[str, Any],
+    *,
+    exclude_mupaw_ui: bool | None = None,
+) -> dict[str, Any]:
+    source_id = source.get("id")
+    source_kind = source.get("kind")
+    if not isinstance(source_id, str) or source_kind not in {"display", "window"}:
+        raise SmokeFailure("Selected capture source is missing a usable display/window id")
+    mode = "full_screen" if source_kind == "display" else "window"
+    if exclude_mupaw_ui is None:
+        exclude_mupaw_ui = source_kind == "display"
+
+    result = call_tool(
+        process,
+        request_id,
+        "mupaw_screenshot_capture",
+        {
+            "mode": mode,
+            "source_id": source_id,
+            "format": "png",
+            "include_cursor": False,
+            "exclude_mupaw_ui": exclude_mupaw_ui,
+            "file_name": f"Mupaw-MCP-{mode}-Smoke",
+        },
+    )
+    return validate_artifact(
+        result,
+        expected_source_id=source_id,
+        expected_source_kind=source_kind,
+    )
+
+
+def capture_region_and_validate(
+    process: subprocess.Popen[bytes],
+    request_id: int,
+    covering_source: dict[str, Any],
+) -> dict[str, Any]:
+    frame = covering_source.get("framePoints")
+    if not isinstance(frame, dict):
+        raise SmokeFailure("Mupaw window source omitted framePoints required for region smoke")
+    values = {key: frame.get(key) for key in ("x", "y", "width", "height")}
+    if not all(isinstance(value, (int, float)) for value in values.values()):
+        raise SmokeFailure(f"Mupaw window framePoints are invalid: {frame!r}")
+
+    frame_x = float(values["x"])
+    frame_y = float(values["y"])
+    frame_width = float(values["width"])
+    frame_height = float(values["height"])
+    if frame_width < 8 or frame_height < 8:
+        raise SmokeFailure("Mupaw window is too small for a structured region smoke")
+    margin = min(24.0, frame_width / 4, frame_height / 4)
+    requested_region = {
+        "coordinate_space": "global_display_points",
+        "x": frame_x + margin,
+        "y": frame_y + margin,
+        "width": min(420.0, frame_width - 2 * margin),
+        "height": min(260.0, frame_height - 2 * margin),
+    }
+
+    result = call_tool(
+        process,
+        request_id,
+        "mupaw_screenshot_capture",
+        {
+            "mode": "region",
+            "region": requested_region,
+            "format": "png",
+            "include_cursor": False,
+            "exclude_mupaw_ui": False,
+            "file_name": "Mupaw-MCP-region-Smoke",
+        },
+    )
+    summary = validate_artifact(result, expected_source_kind="region")
+    summary["requestedRegion"] = requested_region
+    return summary
 
 
 def select_mupaw_window(sources: list[Any]) -> dict[str, Any] | None:
@@ -279,7 +358,12 @@ def run_negative_checks(
         "Unknown Mupaw tool",
     )
     checks["missingSourceID"] = expect_tool_error(
-        call_tool(process, 21, "mupaw_screenshot_capture"),
+        call_tool(
+            process,
+            21,
+            "mupaw_screenshot_capture",
+            {"mode": "window"},
+        ),
         "mupaw_screenshot_capture",
         "source_id is required",
     )
@@ -288,10 +372,47 @@ def run_negative_checks(
             process,
             22,
             "mupaw_screenshot_capture",
-            {"source_id": "display:not-used", "format": "gif"},
+            {"mode": "window", "source_id": "window:not-used", "format": "gif"},
         ),
         "mupaw_screenshot_capture",
         "supports only PNG",
+    )
+    checks["missingRegion"] = expect_tool_error(
+        call_tool(
+            process,
+            23,
+            "mupaw_screenshot_capture",
+            {"mode": "region"},
+        ),
+        "mupaw_screenshot_capture",
+        "region is required",
+    )
+    checks["invalidRegion"] = expect_tool_error(
+        call_tool(
+            process,
+            24,
+            "mupaw_screenshot_capture",
+            {
+                "mode": "region",
+                "region": {"x": 0, "y": 0, "width": -1, "height": 20},
+            },
+        ),
+        "mupaw_screenshot_capture",
+        "positive dimensions",
+    )
+    checks["regionWithSource"] = expect_tool_error(
+        call_tool(
+            process,
+            25,
+            "mupaw_screenshot_capture",
+            {
+                "mode": "region",
+                "source_id": "display:not-used",
+                "region": {"x": 0, "y": 0, "width": 20, "height": 20},
+            },
+        ),
+        "mupaw_screenshot_capture",
+        "source_id must be omitted",
     )
 
     permissions = status.get("permissions")
@@ -300,15 +421,19 @@ def run_negative_checks(
             checks["inventedSource"] = expect_tool_error(
                 call_tool(
                     process,
-                    23,
+                    26,
                     "mupaw_screenshot_capture",
-                    {"source_id": "window:does-not-exist", "format": "png"},
+                    {
+                        "mode": "window",
+                        "source_id": "window:does-not-exist",
+                        "format": "png",
+                    },
                 ),
                 "mupaw_screenshot_capture",
                 "source_not_found",
             )
 
-    recovered = parse_status(call_tool(process, 24, "mupaw_app_status"))
+    recovered = parse_status(call_tool(process, 27, "mupaw_app_status"))
     if recovered.get("running") != status.get("running"):
         raise SmokeFailure("Mupaw app status changed after MCP negative checks")
     checks["statusAfterErrors"] = "ok"
@@ -319,6 +444,8 @@ def run(
     executable: Path,
     require_running: bool,
     capture_one: bool,
+    capture_full_screen: bool,
+    expect_capture_in_progress: bool,
     negative: bool,
 ) -> dict[str, Any]:
     if not executable.is_file() or not os.access(executable, os.X_OK):
@@ -368,6 +495,29 @@ def run(
         missing = EXPECTED_TOOLS - tool_names
         if missing:
             raise SmokeFailure(f"tools/list omitted expected tools: {sorted(missing)}")
+        screenshot_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict)
+                and item.get("name") == "mupaw_screenshot_capture"
+            ),
+            None,
+        )
+        if not isinstance(screenshot_tool, dict):
+            raise SmokeFailure("tools/list omitted mupaw_screenshot_capture metadata")
+        input_schema = screenshot_tool.get("inputSchema")
+        schema_properties = (
+            input_schema.get("properties") if isinstance(input_schema, dict) else None
+        )
+        required_schema_properties = {"mode", "source_id", "region", "exclude_mupaw_ui"}
+        if not isinstance(schema_properties, dict) or not required_schema_properties.issubset(
+            schema_properties
+        ):
+            raise SmokeFailure(
+                "mupaw_screenshot_capture schema omitted M1a mode/region properties"
+            )
+        tool_schema_check = {"m1aCaptureProperties": sorted(required_schema_properties)}
 
         status = parse_status(call_tool(process, 3, "mupaw_app_status"))
         if require_running and not status["running"]:
@@ -380,6 +530,7 @@ def run(
         availability_check: dict[str, Any] | None = None
         capture_check: dict[str, Any] | None = None
         negative_checks: dict[str, str] | None = None
+        conflict_check: dict[str, str] | None = None
         if status["running"]:
             capabilities = parse_json_result(
                 call_tool(process, 4, "mupaw_capabilities_get"),
@@ -393,7 +544,12 @@ def run(
                 for item in capability_items
                 if isinstance(item, dict) and item.get("availability") == "available"
             }
-            expected_available = {"source-enumeration", "screenshot", "agent-mcp"}
+            expected_available = {
+                "source-enumeration",
+                "screenshot",
+                "agent-mcp",
+                "region-capture",
+            }
             missing_available = expected_available - available_ids
             if missing_available:
                 raise SmokeFailure(
@@ -420,9 +576,45 @@ def run(
                 ):
                     raise SmokeFailure("mupaw_sources_list returned no display source")
                 source_check = {"mode": "authorized", "sourceCount": len(sources)}
+                if expect_capture_in_progress:
+                    conflict_source = select_mupaw_window(sources)
+                    if conflict_source is None:
+                        conflict_source = next(
+                            (
+                                item
+                                for item in sources
+                                if isinstance(item, dict) and item.get("kind") == "window"
+                            ),
+                            None,
+                        )
+                    if not isinstance(conflict_source, dict):
+                        raise SmokeFailure(
+                            "No window source was available for capture_in_progress validation"
+                        )
+                    conflict_source_id = conflict_source.get("id")
+                    if not isinstance(conflict_source_id, str):
+                        raise SmokeFailure("Conflict smoke source omitted its identifier")
+                    conflict_message = expect_tool_error(
+                        call_tool(
+                            process,
+                            30,
+                            "mupaw_screenshot_capture",
+                            {
+                                "mode": "window",
+                                "source_id": conflict_source_id,
+                                "format": "png",
+                            },
+                        ),
+                        "mupaw_screenshot_capture",
+                        "capture_in_progress",
+                    )
+                    conflict_check = {
+                        "sourceID": conflict_source_id,
+                        "message": conflict_message,
+                    }
+
                 if capture_one:
                     selected_source = select_mupaw_window(sources)
-                    capture_request_id = 6
                     if selected_source is None:
                         # App startup may have populated the five-second source cache before
                         # the SwiftUI window became visible. Wait for that bounded cache to
@@ -445,15 +637,50 @@ def run(
                             "refreshedForCapture": True,
                         }
                         selected_source = select_mupaw_window(sources)
-                        capture_request_id = 7
                     if selected_source is None:
                         raise SmokeFailure(
                             "No visible Mupaw window was available for a privacy-safe smoke screenshot"
                         )
-                    capture_check = capture_and_validate(
+                    capture_check = {
+                        "window": capture_source_and_validate(
+                            process,
+                            10,
+                            selected_source,
+                            exclude_mupaw_ui=False,
+                        ),
+                        "region": capture_region_and_validate(
+                            process,
+                            11,
+                            selected_source,
+                        ),
+                    }
+                if capture_full_screen:
+                    display_source = next(
+                        (
+                            item
+                            for item in sources
+                            if isinstance(item, dict)
+                            and item.get("kind") == "display"
+                            and item.get("isPrimaryDisplay") is True
+                        ),
+                        next(
+                            (
+                                item
+                                for item in sources
+                                if isinstance(item, dict) and item.get("kind") == "display"
+                            ),
+                            None,
+                        ),
+                    )
+                    if not isinstance(display_source, dict):
+                        raise SmokeFailure("No display source was available for full-screen capture")
+                    if capture_check is None:
+                        capture_check = {}
+                    capture_check["fullScreen"] = capture_source_and_validate(
                         process,
-                        capture_request_id,
-                        selected_source,
+                        12,
+                        display_source,
+                        exclude_mupaw_ui=True,
                     )
             else:
                 if sources_result.get("isError") is not True:
@@ -466,9 +693,9 @@ def run(
                         "mupaw_sources_list did not preserve the permission_required error code"
                     )
                 source_check = {"mode": "permission-required", "message": error_text}
-                if capture_one:
+                if capture_one or capture_full_screen or expect_capture_in_progress:
                     raise SmokeFailure(
-                        "--capture-one requires Screen & System Audio Recording permission"
+                        "capture smoke options require Screen & System Audio Recording permission"
                     )
         else:
             unavailable_result = call_tool(process, 4, "mupaw_capabilities_get")
@@ -487,8 +714,8 @@ def run(
                 "mode": "app-not-running",
                 "message": unavailable_text,
             }
-            if capture_one:
-                raise SmokeFailure("--capture-one requires a running Mupaw.app instance")
+            if capture_one or capture_full_screen or expect_capture_in_progress:
+                raise SmokeFailure("capture smoke options require a running Mupaw.app instance")
 
         if negative:
             negative_checks = run_negative_checks(process, status)
@@ -497,12 +724,14 @@ def run(
             "server": server_info,
             "protocolVersion": initialize.get("protocolVersion"),
             "toolNames": sorted(tool_names),
+            "toolSchemaCheck": tool_schema_check,
             "appStatus": status,
             "availabilityCheck": availability_check,
             "capabilities": capability_summary,
             "sourcesCheck": source_check,
             "captureCheck": capture_check,
             "negativeChecks": negative_checks,
+            "captureConflictCheck": conflict_check,
         }
     finally:
         process.terminate()
@@ -518,6 +747,16 @@ def main() -> int:
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--require-running", action="store_true")
     parser.add_argument("--capture-one", action="store_true")
+    parser.add_argument(
+        "--capture-full-screen",
+        action="store_true",
+        help="Capture the primary display. Cover it with non-sensitive test content first.",
+    )
+    parser.add_argument(
+        "--expect-capture-in-progress",
+        action="store_true",
+        help="Require a live interactive capture and verify that MCP returns capture_in_progress.",
+    )
     parser.add_argument("--negative", action="store_true")
     args = parser.parse_args()
 
@@ -526,6 +765,8 @@ def main() -> int:
             args.executable.resolve(),
             args.require_running,
             args.capture_one,
+            args.capture_full_screen,
+            args.expect_capture_in_progress,
             args.negative,
         )
     except SmokeFailure as error:

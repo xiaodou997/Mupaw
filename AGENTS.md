@@ -12,8 +12,16 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 4. Capture and edit results are represented as stable identifiers and Codable value types.
 5. Long-running work must eventually use job identifiers; do not block MCP indefinitely.
 6. Never write protocol logs to MCP stdout. Use stderr for diagnostics.
-7. Keep M0 small: permissions, source enumeration, screenshot capture, local RPC, MCP exposure, localization, tests, and build validation.
-8. MCP tool names, method names, error codes, and serialized enum values are stable protocol identifiers and must not be translated.
+7. Screenshot modes must share one application-owned capture service. Human region capture uses a native AppKit overlay; Agent region capture uses a structured rectangle and must never simulate clicks in Mupaw's UI.
+8. MCP tool names, method names, error codes, coordinate-space names, and serialized enum values are stable protocol identifiers and must not be translated.
+
+## Capture geometry rules
+
+- Agent regions use `global_display_points`: macOS global display coordinates in point units with a top-left origin.
+- Display and window source descriptors expose their global frame and point-to-pixel scale so Agents do not invent coordinates.
+- Multi-display region capture must split work per display, preserve the requested union rectangle, use bounded output dimensions, and handle mixed Retina scales deterministically.
+- Full-screen and region capture should exclude Mupaw's own UI by default; independent window capture targets the exact returned window ID.
+- Cancelling an interactive selection is not a capture failure and must not create an artifact.
 
 ## Localization rules
 

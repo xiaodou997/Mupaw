@@ -2,6 +2,8 @@
 
 M0 is complete only when all of the following are true on a real macOS 26+ machine.
 
+This document preserves the historical M0 scope. The current screenshot-mode gate is [M1A-ACCEPTANCE.md](M1A-ACCEPTANCE.md); current smoke commands may exercise stronger M1a paths without expanding what M0 originally claimed.
+
 ## Build and structure
 
 - `make generate` succeeds from a clean checkout.

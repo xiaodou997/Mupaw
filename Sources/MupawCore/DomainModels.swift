@@ -72,6 +72,7 @@ public struct CapabilitySnapshot: Codable, Sendable, Equatable {
 public enum CaptureSourceKind: String, Codable, Sendable {
     case display
     case window
+    case region
 }
 
 public struct CaptureSourceDescriptor: Codable, Sendable, Equatable, Identifiable {
@@ -79,26 +80,44 @@ public struct CaptureSourceDescriptor: Codable, Sendable, Equatable, Identifiabl
     public let kind: CaptureSourceKind
     public let title: String
     public let applicationName: String?
+    public let applicationBundleIdentifier: String?
+    public let applicationProcessID: Int32?
     public let pixelWidth: Int
     public let pixelHeight: Int
+    public let framePoints: CaptureRect?
+    public let pointPixelScale: Double?
     public let isOnScreen: Bool
+    public let isActive: Bool?
+    public let isPrimaryDisplay: Bool?
 
     public init(
         id: String,
         kind: CaptureSourceKind,
         title: String,
         applicationName: String?,
+        applicationBundleIdentifier: String? = nil,
+        applicationProcessID: Int32? = nil,
         pixelWidth: Int,
         pixelHeight: Int,
-        isOnScreen: Bool
+        framePoints: CaptureRect? = nil,
+        pointPixelScale: Double? = nil,
+        isOnScreen: Bool,
+        isActive: Bool? = nil,
+        isPrimaryDisplay: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
         self.title = title
         self.applicationName = applicationName
+        self.applicationBundleIdentifier = applicationBundleIdentifier
+        self.applicationProcessID = applicationProcessID
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        self.framePoints = framePoints
+        self.pointPixelScale = pointPixelScale
         self.isOnScreen = isOnScreen
+        self.isActive = isActive
+        self.isPrimaryDisplay = isPrimaryDisplay
     }
 }
 
@@ -117,10 +136,31 @@ public enum ScreenshotFormat: String, Codable, Sendable {
 }
 
 public struct ScreenshotRequest: Codable, Sendable, Equatable {
-    public let sourceID: String
+    public let mode: ScreenshotCaptureMode
+    public let sourceID: String?
+    public let region: CaptureRegion?
     public let format: ScreenshotFormat
     public let includeCursor: Bool
+    public let excludeMupawUI: Bool
     public let fileName: String?
+
+    public init(
+        mode: ScreenshotCaptureMode,
+        sourceID: String? = nil,
+        region: CaptureRegion? = nil,
+        format: ScreenshotFormat = .png,
+        includeCursor: Bool = false,
+        excludeMupawUI: Bool = true,
+        fileName: String? = nil
+    ) {
+        self.mode = mode
+        self.sourceID = sourceID
+        self.region = region
+        self.format = format
+        self.includeCursor = includeCursor
+        self.excludeMupawUI = excludeMupawUI
+        self.fileName = fileName
+    }
 
     public init(
         sourceID: String,
@@ -128,10 +168,48 @@ public struct ScreenshotRequest: Codable, Sendable, Equatable {
         includeCursor: Bool = false,
         fileName: String? = nil
     ) {
+        self.init(
+            mode: sourceID.hasPrefix("window:") ? .window : .fullScreen,
+            sourceID: sourceID,
+            format: format,
+            includeCursor: includeCursor,
+            excludeMupawUI: false,
+            fileName: fileName
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case sourceID
+        case region
+        case format
+        case includeCursor
+        case excludeMupawUI
+        case fileName
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let sourceID = try container.decodeIfPresent(String.self, forKey: .sourceID)
+        let region = try container.decodeIfPresent(CaptureRegion.self, forKey: .region)
+        let inferredMode: ScreenshotCaptureMode
+        if let explicitMode = try container.decodeIfPresent(ScreenshotCaptureMode.self, forKey: .mode) {
+            inferredMode = explicitMode
+        } else if region != nil {
+            inferredMode = .region
+        } else if sourceID?.hasPrefix("window:") == true {
+            inferredMode = .window
+        } else {
+            inferredMode = .fullScreen
+        }
+
+        self.mode = inferredMode
         self.sourceID = sourceID
-        self.format = format
-        self.includeCursor = includeCursor
-        self.fileName = fileName
+        self.region = region
+        self.format = try container.decodeIfPresent(ScreenshotFormat.self, forKey: .format) ?? .png
+        self.includeCursor = try container.decodeIfPresent(Bool.self, forKey: .includeCursor) ?? false
+        self.excludeMupawUI = try container.decodeIfPresent(Bool.self, forKey: .excludeMupawUI) ?? false
+        self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
     }
 }
 

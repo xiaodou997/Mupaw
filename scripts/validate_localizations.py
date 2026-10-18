@@ -20,6 +20,12 @@ REQUIRED_LOCALIZABLE_KEYS = {
     "permission.screen_capture",
     "rpc.ready.format",
     "capture.error.source_not_found.format",
+    "capture.mode.full_screen",
+    "capture.mode.window",
+    "capture.mode.region",
+    "capture.region.instructions",
+    "capture.error.invalid_region",
+    "shortcut.status.conflict",
 }
 REQUIRED_INFO_KEYS = {
     "NSCameraUsageDescription",

@@ -2,6 +2,12 @@ import Foundation
 import MCP
 import MupawCore
 
+private struct ToolArgumentError: Error, LocalizedError, Sendable {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
 internal struct MupawToolRouter: Sendable {
     func handle(name: String, arguments: [String: Value]?) async -> CallTool.Result {
         do {
@@ -64,22 +70,57 @@ internal struct MupawToolRouter: Sendable {
     }
 
     private func screenshot(arguments: [String: Value]?) async throws -> CallTool.Result {
-        guard let sourceID = arguments?["source_id"]?.stringValue,
-            !sourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return failure("source_id is required. Call mupaw_sources_list and use an exact returned identifier.")
+        let arguments = arguments ?? [:]
+        let formatValue = arguments["format"]?.stringValue ?? ScreenshotFormat.png.rawValue
+        guard formatValue == ScreenshotFormat.png.rawValue else {
+            return failure("M1a supports only PNG screenshots.")
         }
 
-        let formatValue = arguments?["format"]?.stringValue ?? "png"
-        guard formatValue == ScreenshotFormat.png.rawValue else {
-            return failure("M0 supports only PNG screenshots.")
+        let sourceID = arguments["source_id"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = try parseRegion(arguments["region"])
+
+        let mode: ScreenshotCaptureMode
+        if let modeValue = arguments["mode"]?.stringValue {
+            guard let explicitMode = ScreenshotCaptureMode(rawValue: modeValue) else {
+                return failure("mode must be one of full_screen, window, or region.")
+            }
+            mode = explicitMode
+        } else if region != nil {
+            mode = .region
+        } else if sourceID?.hasPrefix("window:") == true {
+            mode = .window
+        } else {
+            mode = .fullScreen
+        }
+
+        switch mode {
+        case .fullScreen, .window:
+            guard let sourceID, !sourceID.isEmpty else {
+                return failure(
+                    "source_id is required for full_screen and window. Call mupaw_sources_list and use an exact returned identifier."
+                )
+            }
+            if region != nil {
+                return failure("region must be omitted for full_screen and window capture.")
+            }
+        case .region:
+            guard region != nil else {
+                return failure("region is required when mode is region.")
+            }
+            if let sourceID, !sourceID.isEmpty {
+                return failure("source_id must be omitted when mode is region.")
+            }
         }
 
         let request = ScreenshotRequest(
+            mode: mode,
             sourceID: sourceID,
+            region: region,
             format: .png,
-            includeCursor: arguments?["include_cursor"]?.boolValue ?? false,
-            fileName: arguments?["file_name"]?.stringValue
+            includeCursor: arguments["include_cursor"]?.boolValue ?? false,
+            excludeMupawUI: arguments["exclude_mupaw_ui"]?.boolValue ?? true,
+            fileName: arguments["file_name"]?.stringValue
         )
         let artifact: ScreenshotArtifact = try await call(
             method: .screenshotCapture,
@@ -101,6 +142,46 @@ internal struct MupawToolRouter: Sendable {
             )
         }
         return .init(content: content, isError: false)
+    }
+
+    private func parseRegion(_ value: Value?) throws -> CaptureRegion? {
+        guard let value else { return nil }
+        guard let object = value.objectValue else {
+            throw ToolArgumentError(
+                message: "region must be an object with x, y, width, and height."
+            )
+        }
+        guard let x = number(object["x"]),
+            let y = number(object["y"]),
+            let width = number(object["width"]),
+            let height = number(object["height"]),
+            x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+            width > 0, height > 0
+        else {
+            throw ToolArgumentError(
+                message:
+                    "region x, y, width, and height must be finite numbers with positive dimensions."
+            )
+        }
+
+        let coordinateSpaceValue =
+            object["coordinate_space"]?.stringValue
+            ?? CaptureCoordinateSpace.globalDisplayPoints.rawValue
+        guard let coordinateSpace = CaptureCoordinateSpace(rawValue: coordinateSpaceValue) else {
+            throw ToolArgumentError(
+                message: "region.coordinate_space must be global_display_points."
+            )
+        }
+        return CaptureRegion(
+            coordinateSpace: coordinateSpace,
+            rect: CaptureRect(x: x, y: y, width: width, height: height)
+        )
+    }
+
+    private func number(_ value: Value?) -> Double? {
+        if let double = value?.doubleValue { return double }
+        if let integer = value?.intValue { return Double(integer) }
+        return nil
     }
 
     private func call<Payload: Encodable & Sendable, Result: Decodable & Sendable>(

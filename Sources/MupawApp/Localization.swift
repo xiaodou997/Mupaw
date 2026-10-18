@@ -24,4 +24,26 @@ enum L10n {
             return string("permission.status.unavailable")
         }
     }
+
+    static func captureMode(_ mode: ScreenshotCaptureMode) -> String {
+        switch mode {
+        case .fullScreen:
+            return string("capture.mode.full_screen")
+        case .window:
+            return string("capture.mode.window")
+        case .region:
+            return string("capture.mode.region")
+        }
+    }
+
+    static func sourceKind(_ kind: CaptureSourceKind) -> String {
+        switch kind {
+        case .display:
+            return string("capture.mode.full_screen")
+        case .window:
+            return string("capture.mode.window")
+        case .region:
+            return string("capture.mode.region")
+        }
+    }
 }

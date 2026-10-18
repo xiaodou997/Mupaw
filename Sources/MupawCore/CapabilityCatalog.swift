@@ -15,21 +15,24 @@ public enum CapabilityCatalog {
                 ),
                 .init(
                     id: "screenshot",
-                    title: "Window and display screenshot",
+                    title: "Full-screen, window, and region screenshot",
                     availability: .available,
-                    detail: "Captures a returned source identifier as PNG and stores it in Mupaw's artifact directory."
+                    detail:
+                        "Captures an explicit display, window, or structured region as PNG and stores it in Mupaw's artifact directory."
                 ),
                 .init(
                     id: "agent-mcp",
                     title: "Local MCP control",
                     availability: .available,
-                    detail: "Exposes status, capabilities, sources, and screenshot capture to a local Agent."
+                    detail:
+                        "Exposes status, capabilities, source discovery, and full-screen/window/structured-region capture to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
-                    title: "Interactive region capture",
-                    availability: .planned,
-                    detail: "Planned for M1 after the base capture and Agent path is accepted."
+                    title: "Interactive and structured region capture",
+                    availability: .available,
+                    detail:
+                        "Provides a native multi-display selection overlay for people and a structured global-display-points rectangle for Agents."
                 ),
                 .init(
                     id: "annotations-ocr-style",

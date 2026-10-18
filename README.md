@@ -4,17 +4,39 @@
 
 Mupaw is a source-available native macOS 26+ screenshot and screen-recording application designed for both people and Agents.
 
-The first development milestone focuses on a reliable foundation:
+Mupaw currently includes the M0 foundation and the M1a screenshot-mode layer:
 
-- native SwiftUI/AppKit application shell;
-- ScreenCaptureKit source discovery and still-image capture;
-- a single application-owned capture service;
-- a local authenticated RPC bridge;
-- an MCP stdio server that exposes the same operations to Agents;
+- explicit full-screen, window, and region PNG capture;
+- a native AppKit region-selection overlay with cancellation and multi-display selection;
+- a structured Agent region contract that does not simulate UI clicks;
+- Retina-aware, bounded multi-display region planning and composition;
+- global shortcuts for full screen, frontmost window, and region selection;
+- ScreenCaptureKit source discovery and a single application-owned capture service;
+- a local authenticated RPC bridge and MCP stdio server using the same capture path;
 - English and Simplified Chinese localization from the first version;
-- deterministic project files, tests, and local build commands.
+- deterministic project files, tests, and local validation commands.
 
-Long scrolling screenshots, annotations, OCR, audio recording, camera overlay, GIF export, click highlights, keystroke display, and automatic zoom are planned on top of this foundation. They are intentionally not mixed into M0 before the capture and Agent control path is proven.
+Long scrolling screenshots, annotations, OCR, visual styling, audio/video recording, camera overlay, GIF export, click highlights, keystroke display, and automatic zoom remain planned. They are not part of M1a.
+
+## Screenshot modes
+
+The app provides three explicit modes:
+
+- **Full Screen** captures an exact display returned by ScreenCaptureKit. Mupaw windows are excluded by default.
+- **Window** captures an exact independent window returned by source discovery.
+- **Region** lets a person drag across one or more displays, or lets an Agent provide a structured rectangle.
+
+Default global shortcuts are:
+
+```text
+Control + Option + Command + 1   Full screen under the pointer
+Control + Option + Command + 2   Frontmost eligible window
+Control + Option + Command + 3   Interactive region selection
+```
+
+Shortcut conflicts are shown in the app and can be retried. Interactive region selection can be cancelled with `Esc` or a right-click and creates no artifact when cancelled.
+
+Agent region coordinates use the stable `global_display_points` coordinate space: macOS global display coordinates measured in points, with a top-left origin. `mupaw_sources_list` returns global frames and point-to-pixel scales for displays and windows.
 
 ## Requirements
 
@@ -70,10 +92,16 @@ After Mupaw is running, validate the live app bridge as well:
 make mcp-smoke-running
 ```
 
-After granting Screen & System Audio Recording permission, run a real MCP screenshot and validate its file, hash, metadata, and image preview:
+After granting Screen & System Audio Recording permission, run real MCP window and structured-region captures and validate their files, hashes, metadata, and previews:
 
 ```bash
 make mcp-smoke-capture
+```
+
+A full-screen MCP smoke test is intentionally separate because it captures the current display. Cover the display with non-sensitive test content before running it:
+
+```bash
+make mcp-smoke-full-screen
 ```
 
 Exercise MCP argument failures and recovery, then exercise the authenticated loopback RPC directly with invalid tokens, unknown methods, malformed JSON, oversized frames, disconnects, and concurrent calls:
@@ -83,13 +111,21 @@ make mcp-negative-smoke
 make rpc-negative-smoke
 ```
 
-Run the complete M0 acceptance sequence. It checks formatting and localization, runs all unit tests, rebuilds and restarts the stably signed development app, waits for the bridge, performs negative RPC checks, and finishes with a real MCP screenshot:
+Run the complete M1a non-full-screen acceptance sequence. It checks formatting and localization, runs all unit tests, rebuilds and restarts the stably signed development app, performs negative RPC/MCP checks, and validates real window and structured-region captures:
 
 ```bash
-make m0-acceptance
+make m1a-acceptance
 ```
 
-`make m0-acceptance` expects the stable signing identity in `.mupaw.local.mk` and Screen & System Audio Recording permission to have been granted to `~/Applications/Mupaw.app`.
+`make m1a-acceptance` expects the stable signing identity in `.mupaw.local.mk` and Screen & System Audio Recording permission to have been granted to `~/Applications/Mupaw.app`. The historical M0-only gate remains available as `make m0-acceptance`.
+
+To validate UI/MCP conflict handling, begin an interactive region selection and, before completing it, run:
+
+```bash
+make mcp-capture-conflict-smoke
+```
+
+The MCP request must return `capture_in_progress`; cancel the overlay with `Esc` afterward.
 
 Open the generated project when UI debugging is needed:
 
@@ -105,9 +141,9 @@ Run `make localization-check` after changing translations. It verifies that both
 
 ## Repository layout
 
-- `Sources/MupawCore`: shared models, bounded RPC codec, storage paths, and client code
-- `Sources/MupawCapture`: ScreenCaptureKit and permission services owned by the app
-- `Sources/MupawApp`: native macOS application and local RPC server
+- `Sources/MupawCore`: shared capture geometry, models, bounded RPC codec, storage paths, and client code
+- `Sources/MupawCapture`: ScreenCaptureKit source, full-screen/window/region capture, composition, and permission services
+- `Sources/MupawApp`: native macOS UI, region overlay, global shortcuts, and local RPC server
 - `Sources/MupawMCP`: MCP stdio bridge for Agent clients
 - `Resources/MupawApp`: localized UI and Info.plist resources
 - `Tests`: deterministic unit tests

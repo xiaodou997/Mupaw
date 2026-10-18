@@ -10,13 +10,15 @@ struct ContentView: View {
             header
             Divider()
             HSplitView {
-                sidebar
-                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
+                ScrollView {
+                    sidebar
+                }
+                .frame(minWidth: 320, idealWidth: 360, maxWidth: 440)
                 detail
-                    .frame(minWidth: 440)
+                    .frame(minWidth: 460)
             }
         }
-        .frame(minWidth: 820, minHeight: 600)
+        .frame(minWidth: 860, minHeight: 640)
         .task {
             await model.start()
         }
@@ -46,6 +48,10 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if model.isBusy {
+                ProgressView()
+                    .controlSize(.small)
+            }
             StatusPill(
                 title: model.permissions.screenCapture == .authorized
                     ? L10n.string("status.capture_ready")
@@ -60,61 +66,115 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            GroupBox(L10n.string("group.permissions")) {
-                VStack(alignment: .leading, spacing: 9) {
-                    permissionRow(L10n.string("permission.screen_capture"), model.permissions.screenCapture)
-                    permissionRow(L10n.string("permission.microphone"), model.permissions.microphone)
-                    permissionRow(L10n.string("permission.camera"), model.permissions.camera)
-                    permissionRow(L10n.string("permission.accessibility"), model.permissions.accessibility)
-                    permissionRow(L10n.string("permission.input_monitoring"), model.permissions.inputMonitoring)
+            captureGroup
+            shortcutsGroup
+            permissionsGroup
+        }
+        .padding(16)
+    }
 
-                    HStack {
-                        Button(L10n.string("action.refresh")) {
-                            model.refreshPermissions()
-                        }
-                        Button(L10n.string("action.request_screen_access")) {
-                            model.requestScreenCapturePermission()
-                        }
+    private var captureGroup: some View {
+        GroupBox(L10n.string("group.screenshot")) {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker(L10n.string("capture.mode.label"), selection: $model.selectedCaptureMode) {
+                    ForEach(ScreenshotCaptureMode.allCases, id: \.self) { mode in
+                        Text(L10n.captureMode(mode)).tag(mode)
                     }
-                    .padding(.top, 4)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(6)
-            }
+                .pickerStyle(.segmented)
 
-            GroupBox(L10n.string("group.capture_sources")) {
-                VStack(spacing: 8) {
-                    List(model.sources, selection: $model.selectedSourceID) { source in
-                        HStack {
-                            Image(systemName: source.kind == .display ? "display" : "macwindow")
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(source.title)
-                                    .lineLimit(1)
-                                Text(sourceSubtitle(source))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .tag(source.id)
+                Toggle(L10n.string("toggle.include_cursor"), isOn: $model.includeCursor)
+
+                if model.selectedCaptureMode == .region {
+                    Text(L10n.string("capture.region.description"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task { await model.captureSelectedMode() }
+                    } label: {
+                        Label(
+                            model.isSelectingRegion
+                                ? L10n.string("capture.region.selecting")
+                                : L10n.string("action.select_region"),
+                            systemImage: "viewfinder"
+                        )
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(minHeight: 230)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(captureDisabled)
+                } else {
+                    List(model.captureSources, selection: $model.selectedSourceID) { source in
+                        sourceRow(source)
+                            .tag(source.id)
+                    }
+                    .frame(minHeight: 220, idealHeight: 280)
 
                     HStack {
                         Button(L10n.string("action.refresh_sources")) {
                             Task { await model.refreshSources() }
                         }
                         Spacer()
-                        Button(L10n.string("action.capture")) {
-                            Task { await model.captureSelectedSource() }
+                        Button(captureButtonTitle) {
+                            Task { await model.captureSelectedMode() }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(model.selectedSourceID == nil || model.isBusy)
+                        .disabled(captureDisabled || model.selectedSourceID == nil)
                     }
                 }
-                .padding(6)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
         }
-        .padding(16)
+    }
+
+    private var shortcutsGroup: some View {
+        GroupBox(L10n.string("group.shortcuts")) {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(model.hotKeyRegistrations) { registration in
+                    HStack(spacing: 8) {
+                        Image(systemName: shortcutIcon(registration.shortcut))
+                        Text(shortcutTitle(registration.shortcut))
+                        Spacer()
+                        Text(registration.shortcut.displayText)
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        shortcutState(registration.state)
+                    }
+                }
+                if model.hotKeyRegistrations.contains(where: { $0.state != .registered }) {
+                    Button(L10n.string("action.retry_shortcuts")) {
+                        model.retryGlobalHotKeys()
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
+    }
+
+    private var permissionsGroup: some View {
+        GroupBox(L10n.string("group.permissions")) {
+            VStack(alignment: .leading, spacing: 9) {
+                permissionRow(L10n.string("permission.screen_capture"), model.permissions.screenCapture)
+                permissionRow(L10n.string("permission.microphone"), model.permissions.microphone)
+                permissionRow(L10n.string("permission.camera"), model.permissions.camera)
+                permissionRow(L10n.string("permission.accessibility"), model.permissions.accessibility)
+                permissionRow(L10n.string("permission.input_monitoring"), model.permissions.inputMonitoring)
+
+                HStack {
+                    Button(L10n.string("action.refresh")) {
+                        model.refreshPermissions()
+                    }
+                    Button(L10n.string("action.request_screen_access")) {
+                        model.requestScreenCapturePermission()
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
     }
 
     private var detail: some View {
@@ -132,6 +192,7 @@ struct ContentView: View {
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
 
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                    metadataRow(L10n.string("metadata.mode"), L10n.sourceKind(artifact.source.kind))
                     metadataRow(L10n.string("metadata.source"), artifact.source.title)
                     metadataRow(
                         L10n.string("metadata.size"),
@@ -158,6 +219,41 @@ struct ContentView: View {
         .padding(18)
     }
 
+    private var captureDisabled: Bool {
+        model.isBusy || model.permissions.screenCapture != .authorized
+    }
+
+    private var captureButtonTitle: String {
+        switch model.selectedCaptureMode {
+        case .fullScreen:
+            return L10n.string("action.capture_full_screen")
+        case .window:
+            return L10n.string("action.capture_window")
+        case .region:
+            return L10n.string("action.select_region")
+        }
+    }
+
+    @ViewBuilder
+    private func sourceRow(_ source: CaptureSourceDescriptor) -> some View {
+        HStack {
+            Image(systemName: source.kind == .display ? "display" : "macwindow")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(source.title)
+                    .lineLimit(1)
+                Text(sourceSubtitle(source))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if source.isActive == true || source.isPrimaryDisplay == true {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 6))
+                    .foregroundStyle(.green)
+            }
+        }
+    }
+
     private func permissionRow(_ title: String, _ status: PermissionStatus) -> some View {
         HStack {
             Image(systemName: status == .authorized ? "checkmark.circle.fill" : "circle.dashed")
@@ -170,7 +266,48 @@ struct ContentView: View {
 
     private func sourceSubtitle(_ source: CaptureSourceDescriptor) -> String {
         let owner = source.applicationName.map { "\($0) · " } ?? ""
-        return "\(owner)\(source.pixelWidth) × \(source.pixelHeight)"
+        let scale = source.pointPixelScale.map { String(format: " · %.1f×", $0) } ?? ""
+        return "\(owner)\(source.pixelWidth) × \(source.pixelHeight)\(scale)"
+    }
+
+    private func shortcutTitle(_ shortcut: GlobalCaptureShortcut) -> String {
+        switch shortcut {
+        case .fullScreen:
+            return L10n.string("shortcut.full_screen")
+        case .window:
+            return L10n.string("shortcut.window")
+        case .region:
+            return L10n.string("shortcut.region")
+        }
+    }
+
+    private func shortcutIcon(_ shortcut: GlobalCaptureShortcut) -> String {
+        switch shortcut {
+        case .fullScreen:
+            return "display"
+        case .window:
+            return "macwindow"
+        case .region:
+            return "viewfinder"
+        }
+    }
+
+    @ViewBuilder
+    private func shortcutState(_ state: GlobalHotKeyRegistration.State) -> some View {
+        switch state {
+        case .registered:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .help(L10n.string("shortcut.status.registered"))
+        case .conflict:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .help(L10n.string("shortcut.status.conflict"))
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+                .help(L10n.string("shortcut.status.failed"))
+        }
     }
 
     @ViewBuilder

@@ -1,7 +1,31 @@
+import AppKit
 import Foundation
 import MupawCapture
 import MupawCore
 import Observation
+
+private enum AppCaptureError: Error, LocalizedError {
+    case operationInProgress
+    case permissionRequired
+    case sourceRequired
+    case noDisplayUnderPointer
+    case noActiveWindow
+
+    var errorDescription: String? {
+        switch self {
+        case .operationInProgress:
+            return L10n.string("capture.error.operation_in_progress")
+        case .permissionRequired:
+            return L10n.string("capture.error.permission_required")
+        case .sourceRequired:
+            return L10n.string("error.select_source")
+        case .noDisplayUnderPointer:
+            return L10n.string("capture.error.no_display_under_pointer")
+        case .noActiveWindow:
+            return L10n.string("capture.error.no_active_window")
+        }
+    }
+}
 
 @MainActor
 @Observable
@@ -14,16 +38,37 @@ final class AppModel {
         inputMonitoring: .denied
     )
     private(set) var sources: [CaptureSourceDescriptor] = []
+    var selectedCaptureMode: ScreenshotCaptureMode = .region {
+        didSet { normalizeSelectedSource() }
+    }
     var selectedSourceID: String?
+    var includeCursor = false
     private(set) var lastArtifact: ScreenshotArtifact?
     private(set) var rpcStatus = L10n.string("rpc.not_started")
     private(set) var isBusy = false
+    private(set) var isSelectingRegion = false
+    private(set) var hotKeyRegistrations: [GlobalHotKeyRegistration] = []
     var errorMessage: String?
+
+    var captureSources: [CaptureSourceDescriptor] {
+        switch selectedCaptureMode {
+        case .fullScreen:
+            return sources.filter { $0.kind == .display }
+        case .window:
+            return sources.filter { $0.kind == .window }
+        case .region:
+            return []
+        }
+    }
 
     private let paths: MupawPaths
     private let captureService: CaptureService
     private let permissionService = PermissionService()
+    private let regionSelectionController = RegionSelectionController()
     private var rpcServer: AgentRPCServer?
+    private var hotKeyManager: GlobalHotKeyManager?
+    private var workspaceObserver: NSObjectProtocol?
+    private var lastExternalApplicationProcessID: Int32?
     private var hasStarted = false
 
     init() {
@@ -49,6 +94,8 @@ final class AppModel {
         guard !hasStarted else { return }
         hasStarted = true
         refreshPermissions()
+        startTrackingExternalApplications()
+        startGlobalHotKeys()
 
         do {
             let server = AgentRPCServer(
@@ -68,11 +115,18 @@ final class AppModel {
         }
 
         if permissions.screenCapture == .authorized {
-            await refreshSources()
+            await refreshSources(showErrors: false)
         }
     }
 
     func shutdown() {
+        regionSelectionController.cancel()
+        hotKeyManager?.stop()
+        hotKeyManager = nil
+        if let workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+            self.workspaceObserver = nil
+        }
         rpcServer?.stop()
         rpcServer = nil
         rpcStatus = L10n.string("rpc.stopped")
@@ -85,54 +139,317 @@ final class AppModel {
     func requestScreenCapturePermission() {
         _ = permissionService.requestScreenCaptureAccess()
         refreshPermissions()
+        if permissions.screenCapture == .authorized {
+            Task { await refreshSources(showErrors: false) }
+        }
     }
 
-    func refreshSources() async {
-        await performBusyWork {
+    func refreshSources(showErrors: Bool = true) async {
+        guard !isBusy else { return }
+        do {
             let result = try await captureService.listSources(forceRefresh: true)
             sources = result.sources
-            if selectedSourceID == nil || !sources.contains(where: { $0.id == selectedSourceID }) {
-                selectedSourceID = sources.first?.id
-            }
-        }
-    }
-
-    func captureSelectedSource() async {
-        guard let selectedSourceID else {
-            errorMessage = L10n.string("error.select_source")
-            return
-        }
-        await performBusyWork {
-            lastArtifact = try await captureService.capture(
-                ScreenshotRequest(sourceID: selectedSourceID)
-            )
-        }
-    }
-
-    private func performBusyWork(_ operation: () async throws -> Void) async {
-        guard !isBusy else { return }
-        isBusy = true
-        defer { isBusy = false }
-        errorMessage = nil
-
-        do {
-            try await operation()
+            normalizeSelectedSource()
         } catch {
-            errorMessage = localizedMessage(for: error)
+            if showErrors {
+                errorMessage = localizedMessage(for: error)
+            }
             refreshPermissions()
         }
     }
 
-    private func localizedMessage(for error: Error) -> String {
-        if let captureError = error as? CaptureServiceError {
-            switch captureError {
-            case .sourceNotFound(let identifier):
-                return L10n.format("capture.error.source_not_found.format", identifier)
-            case .invalidSourceSize(let identifier):
-                return L10n.format("capture.error.invalid_source_size.format", identifier)
+    func captureSelectedMode() async {
+        await performCapture {
+            switch selectedCaptureMode {
+            case .region:
+                return try await captureInteractiveRegionArtifact()
+            case .fullScreen, .window:
+                guard let selectedSourceID else {
+                    throw AppCaptureError.sourceRequired
+                }
+                return try await captureService.capture(
+                    ScreenshotRequest(
+                        mode: selectedCaptureMode,
+                        sourceID: selectedSourceID,
+                        includeCursor: includeCursor,
+                        excludeMupawUI: selectedCaptureMode == .fullScreen
+                    )
+                )
             }
         }
+    }
+
+    func retryGlobalHotKeys() {
+        hotKeyRegistrations = hotKeyManager?.start() ?? []
+    }
+
+    private func performCapture(
+        _ operation: () async throws -> ScreenshotArtifact
+    ) async {
+        guard !isBusy else {
+            NSSound.beep()
+            errorMessage = AppCaptureError.operationInProgress.localizedDescription
+            return
+        }
+        guard permissions.screenCapture == .authorized else {
+            errorMessage = AppCaptureError.permissionRequired.localizedDescription
+            return
+        }
+
+        isBusy = true
+        errorMessage = nil
+        defer {
+            isBusy = false
+            isSelectingRegion = false
+        }
+
+        do {
+            lastArtifact = try await operation()
+        } catch let error as RegionSelectionError where error == .cancelled {
+            errorMessage = nil
+        } catch {
+            errorMessage = localizedMessage(for: error)
+            refreshPermissions()
+            if error is CaptureServiceError {
+                await refreshSourceStateAfterCaptureFailure()
+            }
+        }
+    }
+
+    private func captureInteractiveRegionArtifact() async throws -> ScreenshotArtifact {
+        isSelectingRegion = true
+        let region = try await regionSelectionController.selectRegion()
+        isSelectingRegion = false
+        try await Task.sleep(for: .milliseconds(120))
+        return try await captureService.capture(
+            ScreenshotRequest(
+                mode: .region,
+                region: region,
+                includeCursor: includeCursor,
+                excludeMupawUI: true
+            )
+        )
+    }
+
+    private func captureDisplayUnderPointer() async {
+        await performCapture {
+            let point = NSEvent.mouseLocation
+            guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }),
+                let displayID = displayID(for: screen)
+            else {
+                throw AppCaptureError.noDisplayUnderPointer
+            }
+            let result = try await captureService.listSources(forceRefresh: true)
+            sources = result.sources
+            normalizeSelectedSource()
+            return try await captureService.capture(
+                ScreenshotRequest(
+                    mode: .fullScreen,
+                    sourceID: "display:\(displayID)",
+                    includeCursor: includeCursor,
+                    excludeMupawUI: true
+                )
+            )
+        }
+    }
+
+    private func captureFrontmostWindow() async {
+        await performCapture {
+            let application = NSWorkspace.shared.frontmostApplication
+            let preferredProcessID: Int32?
+            if application?.bundleIdentifier == MupawConstants.appBundleIdentifier {
+                preferredProcessID = lastExternalApplicationProcessID
+            } else {
+                preferredProcessID = application?.processIdentifier
+            }
+            guard let preferredProcessID else {
+                throw AppCaptureError.noActiveWindow
+            }
+
+            let result = try await captureService.listSources(forceRefresh: true)
+            sources = result.sources
+            normalizeSelectedSource()
+            let candidates = result.sources.filter {
+                $0.kind == .window
+                    && $0.applicationProcessID == preferredProcessID
+                    && $0.isOnScreen
+            }
+            let selected = frontmostWindowSource(
+                from: candidates,
+                processID: preferredProcessID
+            )
+            guard let selected else {
+                throw AppCaptureError.noActiveWindow
+            }
+            return try await captureService.capture(
+                ScreenshotRequest(
+                    mode: .window,
+                    sourceID: selected.id,
+                    includeCursor: includeCursor,
+                    excludeMupawUI: false
+                )
+            )
+        }
+    }
+
+    private func frontmostWindowSource(
+        from candidates: [CaptureSourceDescriptor],
+        processID: Int32
+    ) -> CaptureSourceDescriptor? {
+        let candidatesByWindowID = Dictionary(
+            uniqueKeysWithValues: candidates.compactMap { source -> (CGWindowID, CaptureSourceDescriptor)? in
+                guard source.id.hasPrefix("window:"),
+                    let value = UInt32(source.id.dropFirst("window:".count))
+                else {
+                    return nil
+                }
+                return (CGWindowID(value), source)
+            }
+        )
+        guard !candidatesByWindowID.isEmpty else { return nil }
+
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        if let windowInfo = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+            as? [[String: Any]]
+        {
+            for entry in windowInfo {
+                guard let ownerPID = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                    ownerPID == processID,
+                    let windowNumber = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                    let source = candidatesByWindowID[CGWindowID(windowNumber)]
+                else {
+                    continue
+                }
+                return source
+            }
+        }
+
+        return candidates.first(where: { $0.isActive == true }) ?? candidates.first
+    }
+
+    private func normalizeSelectedSource() {
+        let candidates = captureSources
+        guard !candidates.isEmpty else {
+            selectedSourceID = nil
+            return
+        }
+        if let selectedSourceID,
+            candidates.contains(where: { $0.id == selectedSourceID })
+        {
+            return
+        }
+        switch selectedCaptureMode {
+        case .fullScreen:
+            selectedSourceID =
+                candidates.first(where: { $0.isPrimaryDisplay == true })?.id
+                ?? candidates.first?.id
+        case .window:
+            selectedSourceID =
+                candidates.first(where: { $0.isActive == true })?.id
+                ?? candidates.first?.id
+        case .region:
+            selectedSourceID = nil
+        }
+    }
+
+    private func startGlobalHotKeys() {
+        let manager = GlobalHotKeyManager { [weak self] shortcut in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.handleGlobalShortcut(shortcut)
+            }
+        }
+        hotKeyManager = manager
+        hotKeyRegistrations = manager.start()
+    }
+
+    private func handleGlobalShortcut(_ shortcut: GlobalCaptureShortcut) async {
+        switch shortcut {
+        case .fullScreen:
+            await captureDisplayUnderPointer()
+        case .window:
+            await captureFrontmostWindow()
+        case .region:
+            selectedCaptureMode = .region
+            await captureSelectedMode()
+        }
+    }
+
+    private func startTrackingExternalApplications() {
+        if let application = NSWorkspace.shared.frontmostApplication,
+            application.bundleIdentifier != MupawConstants.appBundleIdentifier
+        {
+            lastExternalApplicationProcessID = application.processIdentifier
+        }
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard
+                let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication,
+                application.bundleIdentifier != MupawConstants.appBundleIdentifier
+            else {
+                return
+            }
+            Task { @MainActor in
+                self?.lastExternalApplicationProcessID = application.processIdentifier
+            }
+        }
+    }
+
+    private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value
+    }
+
+    private func refreshSourceStateAfterCaptureFailure() async {
+        if let result = try? await captureService.listSources(forceRefresh: true) {
+            sources = result.sources
+            normalizeSelectedSource()
+        }
+    }
+
+    private func localizedMessage(for error: Error) -> String {
+        if let description = error as? LocalizedError,
+            let errorDescription = description.errorDescription
+        {
+            return errorDescription
+        }
         return error.localizedDescription
+    }
+
+    private func rpcFailure(
+        requestID: String,
+        error: CaptureServiceError
+    ) -> AgentRPCResponse {
+        switch error {
+        case .sourceNotFound:
+            return .failure(
+                id: requestID,
+                code: .sourceNotFound,
+                message: error.localizedDescription
+            )
+        case .sourceRequired, .sourceKindMismatch:
+            return .failure(
+                id: requestID,
+                code: .invalidRequest,
+                message: error.localizedDescription
+            )
+        case .regionRequired, .invalidRegion, .regionOutsideDisplays:
+            return .failure(
+                id: requestID,
+                code: .invalidRegion,
+                message: error.localizedDescription
+            )
+        case .invalidSourceSize, .regionTooLarge, .regionCompositionFailed:
+            return .failure(
+                id: requestID,
+                code: .captureFailed,
+                message: error.localizedDescription
+            )
+        }
     }
 
     private func handleRPC(_ request: AgentRPCRequest) async -> AgentRPCResponse {
@@ -172,6 +489,7 @@ final class AppModel {
                 }
                 let result = try await captureService.listSources()
                 sources = result.sources
+                normalizeSelectedSource()
                 return try .success(id: request.id, value: result)
 
             case .screenshotCapture:
@@ -183,18 +501,22 @@ final class AppModel {
                         message: "Grant Screen & System Audio Recording permission to Mupaw, then retry."
                     )
                 }
+                guard !isBusy else {
+                    return .failure(
+                        id: request.id,
+                        code: .captureInProgress,
+                        message: "Another Mupaw capture operation is already in progress."
+                    )
+                }
+                isBusy = true
+                defer { isBusy = false }
                 let captureRequest = try request.parameters.decode(ScreenshotRequest.self)
                 let artifact = try await captureService.capture(captureRequest)
                 lastArtifact = artifact
                 return try .success(id: request.id, value: artifact)
             }
         } catch let error as CaptureServiceError {
-            switch error {
-            case .sourceNotFound:
-                return .failure(id: request.id, code: .sourceNotFound, message: error.localizedDescription)
-            case .invalidSourceSize:
-                return .failure(id: request.id, code: .captureFailed, message: error.localizedDescription)
-            }
+            return rpcFailure(requestID: request.id, error: error)
         } catch let error as DecodingError {
             return .failure(id: request.id, code: .invalidRequest, message: error.localizedDescription)
         } catch {

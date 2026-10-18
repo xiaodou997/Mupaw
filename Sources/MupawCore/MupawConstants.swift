@@ -10,5 +10,7 @@ public enum MupawConstants {
     public static let maximumRPCMethodUTF8Bytes = 128
     public static let rpcSocketTimeoutSeconds = 30
     public static let previewMaximumDimension = 1_280
+    public static let maximumScreenshotPixelCount = 120_000_000
+    public static let minimumRegionPointDimension = 2.0
 
 }
