@@ -54,13 +54,16 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 
 ## Recording rules
 
-- M1e recording is video-only H.264 in an MP4 container. Do not silently add system audio, microphone, camera, GIF, click/keystroke overlays, or zoom behavior to the base contract.
+- M1e video-only behavior remains the compatibility baseline. M2a may add one optional ScreenCaptureKit system-audio track only when `includeSystemAudio` is true; the default remains false.
+- M2a system audio is 48 kHz stereo AAC in the same MP4. Do not add microphone input, mixing, camera, GIF, click/keystroke overlays, or zoom behavior to this contract.
 - `Mupaw.app` owns one recording service and one active recording session. Screenshot capture/selection and recording start/finalization are mutually exclusive.
 - Human region recording uses the native AppKit selector. Agent region recording accepts a structured `global_display_points` rectangle and must never operate the UI.
-- A successful start returns a stable session UUID; callers poll status and stop/cancel explicitly. Do not claim a completed artifact before AVAssetWriter finalization, AVFoundation track validation, file permissions, byte count, SHA-256, and preview all succeed.
+- Video and audio share one AVAssetWriter timeline. Buffer the first samples as needed, preserve valid source timestamps, and keep audio/video duration difference within the bounded acceptance threshold.
+- If system audio is requested, missing, invalid, or unwritable audio must fail the session; never silently downgrade to a video-only artifact. With audio disabled, the MP4 must contain zero audio tracks.
+- A successful start returns a stable session UUID; callers poll status and stop/cancel explicitly. Do not claim a completed artifact before AVAssetWriter finalization, AVFoundation video/audio track validation, file permissions, byte count, SHA-256, and preview all succeed.
 - Cancelled, failed, interrupted, or source-lost sessions must remove incomplete files and return terminal state without an artifact.
-- Recording dimensions, frame rates, bit rates, duration, history, filenames, and allocation sizes must be bounded. Recordings and files are owner-only.
-- Static sources still require wall-clock-correct MP4 duration; hold the last frame when ScreenCaptureKit does not deliver repeated unchanged frames.
+- Recording dimensions, frame rates, video/audio bit rates, duration, history, filenames, pending sample queues, and allocation sizes must be bounded. Recordings and files are owner-only.
+- Static sources still require wall-clock-correct MP4 duration; hold the last video frame when ScreenCaptureKit does not deliver repeated unchanged frames.
 
 ## Localization rules
 

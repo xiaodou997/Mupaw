@@ -167,7 +167,8 @@ public final class RecordingService {
                 pixelWidth: prepared.resolution.pixelWidth,
                 pixelHeight: prepared.resolution.pixelHeight,
                 frameRate: request.frameRate,
-                quality: request.quality
+                quality: request.quality,
+                includeSystemAudio: request.includeSystemAudio
             ) { [weak self] error in
                 Task { @MainActor [weak self] in
                     await self?.failActiveRecording(sessionID: sessionID, error: error)
@@ -195,6 +196,13 @@ public final class RecordingService {
                 type: .screen,
                 sampleHandlerQueue: writer.sampleQueue
             )
+            if request.includeSystemAudio {
+                try stream.addStreamOutput(
+                    writer,
+                    type: .audio,
+                    sampleHandlerQueue: writer.sampleQueue
+                )
+            }
         } catch {
             await writer.cancelAndDelete()
             throw RecordingServiceError.streamFailed(error.localizedDescription)
@@ -303,6 +311,7 @@ public final class RecordingService {
                 pixelWidth: active.resolution.pixelWidth,
                 pixelHeight: active.resolution.pixelHeight,
                 includeCursor: active.request.includeCursor,
+                audio: artifact.audio,
                 startedAt: active.startedAt,
                 updatedAt: completedAt,
                 elapsedDurationSeconds: artifact.durationSeconds,
@@ -593,7 +602,11 @@ public final class RecordingService {
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.queueDepth = 6
         configuration.showsCursor = request.includeCursor
-        configuration.capturesAudio = false
+        configuration.capturesAudio = request.includeSystemAudio
+        configuration.sampleRate = MupawConstants.recordingSystemAudioSampleRate
+        configuration.channelCount = MupawConstants.recordingSystemAudioChannelCount
+        configuration.excludesCurrentProcessAudio = true
+        configuration.captureMicrophone = false
         configuration.scalesToFit = true
         configuration.preservesAspectRatio = true
         configuration.captureResolution = .best
@@ -649,10 +662,11 @@ public final class RecordingService {
             pixelWidth: active.resolution.pixelWidth,
             pixelHeight: active.resolution.pixelHeight,
             includeCursor: active.request.includeCursor,
+            audio: audioInfo(for: active, metrics: metrics, phase: active.phase),
             startedAt: active.startedAt,
             updatedAt: now,
             elapsedDurationSeconds: max(
-                metrics.durationSeconds,
+                max(metrics.durationSeconds, metrics.audioDurationSeconds),
                 max(0, now.timeIntervalSince(active.startedAt))
             ),
             frameCount: metrics.frameCount
@@ -677,14 +691,48 @@ public final class RecordingService {
             pixelWidth: active.resolution.pixelWidth,
             pixelHeight: active.resolution.pixelHeight,
             includeCursor: active.request.includeCursor,
+            audio: audioInfo(for: active, metrics: metrics, phase: phase),
             startedAt: active.startedAt,
             updatedAt: now,
             elapsedDurationSeconds: max(
-                metrics.durationSeconds,
+                max(metrics.durationSeconds, metrics.audioDurationSeconds),
                 max(0, now.timeIntervalSince(active.startedAt))
             ),
             frameCount: metrics.frameCount,
             errorMessage: errorMessage
+        )
+    }
+
+    private func audioInfo(
+        for active: ActiveRecording,
+        metrics: RecordingFrameMetrics,
+        phase: RecordingPhase
+    ) -> RecordingAudioInfo {
+        guard active.request.includeSystemAudio else { return .disabled }
+        let state: RecordingAudioState =
+            switch phase {
+            case .starting, .recording, .stopping:
+                metrics.audioSampleBufferCount > 0 ? .capturing : .waiting
+            case .completed:
+                .completed
+            case .failed:
+                .failed
+            case .cancelled:
+                .cancelled
+            }
+        return RecordingAudioInfo(
+            requested: true,
+            state: state,
+            codec: .aac,
+            trackCount: 0,
+            sampleRate: metrics.audioSampleRate
+                ?? MupawConstants.recordingSystemAudioSampleRate,
+            channelCount: metrics.audioChannelCount
+                ?? MupawConstants.recordingSystemAudioChannelCount,
+            durationSeconds: metrics.audioSampleBufferCount > 0
+                ? metrics.audioDurationSeconds
+                : nil,
+            sampleBufferCount: metrics.audioSampleBufferCount
         )
     }
 

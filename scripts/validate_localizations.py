@@ -32,6 +32,9 @@ REQUIRED_LOCALIZABLE_KEYS = {
     "workspace.mode.recording",
     "recording.action.start",
     "recording.error.finalization_failed.format",
+    "recording.system_audio",
+    "recording.audio.state.completed",
+    "recording.metadata.audio_sync_difference",
 }
 REQUIRED_INFO_KEYS = {
     "NSCameraUsageDescription",

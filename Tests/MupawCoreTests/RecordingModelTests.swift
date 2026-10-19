@@ -13,6 +13,7 @@ final class RecordingModelTests: XCTestCase {
             frameRate: 30,
             quality: .high,
             includeCursor: true,
+            includeSystemAudio: true,
             fileName: "Demo"
         )
 
@@ -22,6 +23,51 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(decoded, request)
         XCTAssertEqual(decoded.format, .mp4)
         XCTAssertEqual(decoded.region?.coordinateSpace, .globalDisplayPoints)
+        XCTAssertTrue(decoded.includeSystemAudio)
+    }
+
+    func testLegacyRecordingRequestDefaultsSystemAudioOff() throws {
+        let data = Data(
+            """
+            {
+              "mode": "window",
+              "sourceID": "window:42",
+              "frameRate": 30,
+              "includeCursor": true
+            }
+            """.utf8
+        )
+
+        let request = try JSONDecoder.mupaw.decode(RecordingRequest.self, from: data)
+
+        XCTAssertEqual(request.mode, .window)
+        XCTAssertEqual(request.sourceID, "window:42")
+        XCTAssertEqual(request.format, .mp4)
+        XCTAssertEqual(request.quality, .standard)
+        XCTAssertTrue(request.includeCursor)
+        XCTAssertFalse(request.includeSystemAudio)
+        XCTAssertTrue(request.excludeMupawUI)
+    }
+
+    func testRecordingAudioInfoRoundTrip() throws {
+        let value = RecordingAudioInfo(
+            requested: true,
+            state: .completed,
+            codec: .aac,
+            trackCount: 1,
+            sampleRate: 48_000,
+            channelCount: 2,
+            durationSeconds: 4.25,
+            sampleBufferCount: 200,
+            audioVideoDurationDifferenceSeconds: 0.04
+        )
+
+        let data = try JSONEncoder.mupaw.encode(value)
+        let decoded = try JSONDecoder.mupaw.decode(RecordingAudioInfo.self, from: data)
+
+        XCTAssertEqual(decoded, value)
+        XCTAssertEqual(RecordingAudioInfo.disabled.state, .disabled)
+        XCTAssertFalse(RecordingAudioInfo.disabled.requested)
     }
 
     func testResolutionPlannerPreservesAspectAndBoundsSixK() throws {

@@ -602,13 +602,14 @@ def run(
             "frame_rate",
             "quality",
             "include_cursor",
+            "include_system_audio",
             "exclude_mupaw_ui",
             "file_name",
         }
         if not isinstance(recording_start_properties, dict) or not required_recording_properties.issubset(
             recording_start_properties
         ):
-            raise SmokeFailure("mupaw_recording_start schema omitted M1e properties")
+            raise SmokeFailure("mupaw_recording_start schema omitted M2a properties")
         for recording_tool_name in (
             "mupaw_recording_status",
             "mupaw_recording_stop",
@@ -626,7 +627,7 @@ def run(
             properties = schema.get("properties") if isinstance(schema, dict) else None
             if not isinstance(properties, dict) or "session_id" not in properties:
                 raise SmokeFailure(f"{recording_tool_name} schema omitted session_id")
-        tool_schema_check["m1eRecordingStartProperties"] = sorted(required_recording_properties)
+        tool_schema_check["m2aRecordingStartProperties"] = sorted(required_recording_properties)
 
         ocr_tool = next(
             (

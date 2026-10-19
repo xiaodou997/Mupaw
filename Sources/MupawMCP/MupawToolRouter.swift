@@ -184,7 +184,7 @@ internal struct MupawToolRouter: Sendable {
         let arguments = arguments ?? [:]
         let formatValue = arguments["format"]?.stringValue ?? RecordingFormat.mp4.rawValue
         guard let format = RecordingFormat(rawValue: formatValue), format == .mp4 else {
-            return failure("M1e supports only H.264 MP4 video recording.")
+            return failure("M2a supports H.264 MP4 recording with optional AAC system audio.")
         }
 
         guard let modeValue = arguments["mode"]?.stringValue,
@@ -231,6 +231,7 @@ internal struct MupawToolRouter: Sendable {
             frameRate: frameRate,
             quality: quality,
             includeCursor: arguments["include_cursor"]?.boolValue ?? false,
+            includeSystemAudio: arguments["include_system_audio"]?.boolValue ?? false,
             excludeMupawUI: arguments["exclude_mupaw_ui"]?.boolValue ?? true,
             fileName: arguments["file_name"]?.stringValue
         )

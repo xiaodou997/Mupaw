@@ -101,19 +101,19 @@ internal enum MupawToolCatalog {
         Tool(
             name: "mupaw_recording_start",
             description:
-                "Start one application-owned, video-only H.264 MP4 recording and return a stable session ID immediately after ScreenCaptureKit starts. Supports full_screen, window, or a structured single-display region. No audio, camera, click, keystroke, GIF, or zoom features are included in M1e.",
+                "Start one application-owned H.264 MP4 recording with optional AAC system audio and return a stable session ID after ScreenCaptureKit starts. Supports full_screen, window, or a structured single-display region. Microphone, camera, mixing, click, keystroke, GIF, and zoom features are not included in M2a.",
             inputSchema: recordingStartSchema
         ),
         Tool(
             name: "mupaw_recording_status",
             description:
-                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, and the completed artifact when available.",
+                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, system-audio state/sample count/duration, and the completed artifact when available.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
             name: "mupaw_recording_stop",
             description:
-                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, video preview, and track validation are complete.",
+                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, H.264 video validation, and requested AAC system-audio validation are complete.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
@@ -354,6 +354,13 @@ internal enum MupawToolCatalog {
             "include_cursor": .object([
                 "type": .string("boolean"),
                 "default": .bool(false),
+            ]),
+            "include_system_audio": .object([
+                "type": .string("boolean"),
+                "default": .bool(false),
+                "description": .string(
+                    "Capture system audio as one AAC stereo track. When true, missing or invalid audio fails finalization instead of silently producing a video-only file."
+                ),
             ]),
             "exclude_mupaw_ui": .object([
                 "type": .string("boolean"),

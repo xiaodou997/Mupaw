@@ -1,4 +1,4 @@
-# Mupaw MCP contract — M0 through M1e
+# Mupaw MCP contract — M0 through M2a
 
 The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards screenshot capture, MP4 recording sessions, editing, visual styling, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures or records independently, reads arbitrary source files, or drives Mupaw's UI.
 
@@ -10,7 +10,7 @@ Returns whether the app responds, app and protocol versions, process ID, and rel
 
 ### `mupaw_capabilities_get`
 
-Returns the implemented and planned capability matrix. M1e reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available.
+Returns the implemented and planned capability matrix. M2a reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available. The recording capability includes optional AAC system audio; microphone remains planned.
 
 ### `mupaw_sources_list`
 
@@ -41,7 +41,7 @@ For full-screen and window capture, omit `region` and provide an exact `display:
 
 ## Recording tools
 
-M1e is video-only H.264 MP4. It does not record system audio, microphone, camera, clicks, keystrokes, GIF, or zoom events.
+M2a records H.264 MP4 with optional ScreenCaptureKit system audio encoded as one 48 kHz stereo AAC track. `include_system_audio` defaults to `false`, preserving the M1e video-only contract. Microphone, mixing, camera, clicks, keystrokes, GIF, and zoom events are not included.
 
 ### `mupaw_recording_start`
 
@@ -57,6 +57,7 @@ Window example:
   "frame_rate": 30,
   "quality": "standard",
   "include_cursor": false,
+  "include_system_audio": true,
   "file_name": "Product demo"
 }
 ```
@@ -81,7 +82,7 @@ Structured region example:
 }
 ```
 
-`mode` is required. `full_screen` and `window` require an exact source ID from `mupaw_sources_list` and omit `region`. `region` omits `source_id` and must fit inside one active display in M1e. `frame_rate` is `15`, `30`, or `60`; `quality` is `standard` or `high`. The result contains a stable session UUID, active phase, source, requested settings, dimensions, start time, elapsed duration, and frame count.
+`mode` is required. `full_screen` and `window` require an exact source ID from `mupaw_sources_list` and omit `region`. `region` omits `source_id` and must fit inside one active display. `frame_rate` is `15`, `30`, or `60`; `quality` is `standard` or `high`. `include_system_audio` is optional and defaults to `false`. When true, current-process audio is excluded and microphone capture remains off. The result contains a stable session UUID, active phase, source, requested settings, dimensions, start time, elapsed duration, frame count, and structured audio state including whether audio was requested, AAC target identity, sample count, sample rate, channels, and current audio duration when available.
 
 ### `mupaw_recording_status`
 
@@ -107,10 +108,11 @@ Stops the stream and waits for finalization. A successful completed result inclu
 - `format: "mp4"` and `codec: "h264"`;
 - actual dimensions and duration;
 - requested and average frame rate plus frame count;
+- `audio` metadata: requested/state, AAC codec, track count, 48 kHz sample rate, two channels, audio duration, sample-buffer count, and audio/video duration difference;
 - byte count and SHA-256;
 - source, creation/completion times, and bounded JPEG preview.
 
-Completion is claimed only after AVFoundation confirms one playable H.264 video track and zero audio tracks. Repeating stop for an already completed retained session is idempotent and returns the same terminal status.
+Completion is claimed only after AVFoundation confirms one playable H.264 video track. When system audio is disabled, the MP4 must have zero audio tracks. When requested, it must have exactly one AAC track at 48 kHz stereo, positive duration, and an audio/video duration difference no greater than 0.25 seconds. Missing or invalid requested audio is `recording_failed`; Mupaw never silently returns a video-only artifact. Repeating stop for an already completed retained session is idempotent and returns the same terminal status.
 
 ### `mupaw_recording_cancel`
 
@@ -122,7 +124,7 @@ Completion is claimed only after AVFoundation confirms one playable H.264 video 
 
 Stops capture, cancels AVAssetWriter, deletes the incomplete MP4, and returns `cancelled` without an artifact. Stream, writer, source, or finalization failures follow the same no-partial-artifact rule.
 
-Recording files live under Mupaw's owner-only `Recordings` directory. Output dimensions are even, preserve aspect ratio, have a maximum side of 3,840 pixels, and a maximum of 3,840 × 2,160 pixels. Static content is held through the wall-clock stop time so unchanged screens still produce correctly timed clips.
+Recording files live under Mupaw's owner-only `Recordings` directory. Output dimensions are even, preserve aspect ratio, have a maximum side of 3,840 pixels, and a maximum of 3,840 × 2,160 pixels. Initial per-track queues are bounded. Static video content is held through the wall-clock stop time so unchanged screens still produce correctly timed clips. System-audio and video sample timestamps share one AVAssetWriter timeline.
 
 
 ## Screenshot project tools

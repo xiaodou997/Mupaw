@@ -52,6 +52,7 @@ final class AppModel {
     var includeCursor = false
     var recordingFrameRate = 30
     var recordingQuality: RecordingVideoQuality = .standard
+    var recordingSystemAudio = false
     private(set) var currentRecordingStatus: RecordingSessionStatus?
     private(set) var lastRecordingArtifact: RecordingArtifact?
     private(set) var lastArtifact: ScreenshotArtifact?
@@ -484,6 +485,7 @@ final class AppModel {
                     frameRate: recordingFrameRate,
                     quality: recordingQuality,
                     includeCursor: includeCursor,
+                    includeSystemAudio: recordingSystemAudio,
                     excludeMupawUI: selectedCaptureMode != .window
                 )
             )

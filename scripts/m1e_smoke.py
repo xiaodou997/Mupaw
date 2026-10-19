@@ -8,6 +8,8 @@ import hashlib
 import json
 import math
 import os
+import plistlib
+import shutil
 import stat
 import subprocess
 import sys
@@ -21,6 +23,10 @@ import mcp_smoke as base
 
 ROOT = Path(__file__).resolve().parents[1]
 INSPECTOR_SOURCE = ROOT / "scripts" / "inspect_mp4.swift"
+FIXTURE_SOURCE = ROOT / "scripts" / "recording_fixture.swift"
+FIXTURE_APP = Path("/tmp/MupawRecordingFixture.app")
+FIXTURE_BINARY = FIXTURE_APP / "Contents" / "MacOS" / "MupawRecordingFixture"
+FIXTURE_BUNDLE_ID = "com.xiaodou.mupaw.recording-fixture"
 RECORDING_TOOLS = {
     "mupaw_recording_start",
     "mupaw_recording_status",
@@ -90,6 +96,7 @@ def initialize(process: subprocess.Popen[bytes]) -> list[dict[str, Any]]:
         "frame_rate",
         "quality",
         "include_cursor",
+        "include_system_audio",
         "exclude_mupaw_ui",
         "file_name",
     }
@@ -118,28 +125,117 @@ def app_and_sources(
     return status, sources
 
 
-def select_mupaw_window_with_retry(
-    process: subprocess.Popen[bytes], sources: list[Any], request_id: int
-) -> dict[str, Any]:
-    source = base.select_mupaw_window(sources)
-    if source is not None:
-        return source
-
-    # `make run` starts the app through LaunchServices, but the first source
-    # snapshot can arrive before SwiftUI has reopened and published its window.
-    # Send an explicit reopen request and poll the app-owned source registry for
-    # a bounded period instead of treating this startup race as a recording
-    # failure.
-    subprocess.run(
-        ["open", "-b", "com.xiaodou.mupaw"],
+def prepare_recording_fixture() -> None:
+    stop_recording_fixture()
+    should_build = not FIXTURE_BINARY.is_file()
+    if not should_build:
+        should_build = FIXTURE_BINARY.stat().st_mtime < FIXTURE_SOURCE.stat().st_mtime
+    if should_build:
+        shutil.rmtree(FIXTURE_APP, ignore_errors=True)
+        FIXTURE_BINARY.parent.mkdir(parents=True, exist_ok=True)
+        compile_result = subprocess.run(
+            [
+                "xcrun",
+                "swiftc",
+                "-parse-as-library",
+                str(FIXTURE_SOURCE),
+                "-o",
+                str(FIXTURE_BINARY),
+                "-framework",
+                "AppKit",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if compile_result.returncode != 0:
+            raise base.SmokeFailure(
+                "Could not compile the safe recording fixture: "
+                + (compile_result.stderr.strip() or compile_result.stdout.strip())
+            )
+        info = {
+            "CFBundleExecutable": "MupawRecordingFixture",
+            "CFBundleIdentifier": FIXTURE_BUNDLE_ID,
+            "CFBundleName": "Mupaw Recording Fixture",
+            "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": "1.0",
+            "CFBundleVersion": "1",
+            "LSUIElement": False,
+            "NSHighResolutionCapable": True,
+        }
+        with (FIXTURE_APP / "Contents" / "Info.plist").open("wb") as handle:
+            plistlib.dump(info, handle)
+        sign_result = subprocess.run(
+            ["codesign", "--force", "--sign", "-", "--timestamp=none", str(FIXTURE_APP)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if sign_result.returncode != 0:
+            raise base.SmokeFailure(
+                "Could not sign the safe recording fixture: "
+                + (sign_result.stderr.strip() or sign_result.stdout.strip())
+            )
+    launch_result = subprocess.run(
+        ["open", "-n", str(FIXTURE_APP)],
         check=False,
         capture_output=True,
         text=True,
+        timeout=15,
+    )
+    if launch_result.returncode != 0:
+        raise base.SmokeFailure(
+            "Could not launch the safe recording fixture: "
+            + (launch_result.stderr.strip() or launch_result.stdout.strip())
+        )
+
+
+def stop_recording_fixture() -> None:
+    subprocess.run(
+        ["osascript", "-e", f'tell application id "{FIXTURE_BUNDLE_ID}" to quit'],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         timeout=10,
     )
+    subprocess.run(
+        ["pkill", "-f", str(FIXTURE_BINARY)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+
+
+def fixture_window(sources: list[Any]) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in sources
+        if isinstance(item, dict)
+        and item.get("kind") == "window"
+        and item.get("applicationBundleIdentifier") == FIXTURE_BUNDLE_ID
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda item: int(item.get("pixelWidth", 0))
+        * int(item.get("pixelHeight", 0)),
+    )
+
+
+def select_mupaw_window_with_retry(
+    process: subprocess.Popen[bytes], sources: list[Any], request_id: int
+) -> dict[str, Any]:
+    source = fixture_window(sources)
+    if source is not None:
+        return source
+
     last_sources: list[Any] = sources
-    for attempt in range(12):
-        time.sleep(0.75)
+    for attempt in range(24):
+        time.sleep(0.25)
         payload = base.parse_json_result(
             base.call_tool(process, request_id + attempt, "mupaw_sources_list"),
             "mupaw_sources_list",
@@ -148,7 +244,7 @@ def select_mupaw_window_with_retry(
         if not isinstance(refreshed, list):
             raise base.SmokeFailure("refreshed sources payload is invalid")
         last_sources = refreshed
-        source = base.select_mupaw_window(refreshed)
+        source = fixture_window(refreshed)
         if source is not None:
             return source
 
@@ -158,8 +254,8 @@ def select_mupaw_window_with_retry(
         if isinstance(item, dict) and item.get("kind") == "window"
     ]
     raise base.SmokeFailure(
-        "No visible Mupaw window was available for M1e smoke after an explicit reopen "
-        f"and bounded retry ({len(visible_windows)} other windows were visible)"
+        "No visible safe recording fixture was available after a bounded retry "
+        f"({len(visible_windows)} other windows were visible)"
     )
 
 
@@ -173,6 +269,7 @@ def start_recording(
     frame_rate: int,
     quality: str,
     file_name: str,
+    include_system_audio: bool = False,
 ) -> dict[str, Any]:
     arguments: dict[str, Any] = {
         "mode": mode,
@@ -180,6 +277,7 @@ def start_recording(
         "frame_rate": frame_rate,
         "quality": quality,
         "include_cursor": False,
+        "include_system_audio": include_system_audio,
         "exclude_mupaw_ui": mode != "window",
         "file_name": file_name,
     }
@@ -197,11 +295,20 @@ def start_recording(
         ),
         "mupaw_recording_start",
     )
-    validate_active_status(result, expected_frame_rate=frame_rate)
+    validate_active_status(
+        result,
+        expected_frame_rate=frame_rate,
+        expected_system_audio=include_system_audio,
+    )
     return result
 
 
-def validate_active_status(status: dict[str, Any], *, expected_frame_rate: int) -> None:
+def validate_active_status(
+    status: dict[str, Any],
+    *,
+    expected_frame_rate: int,
+    expected_system_audio: bool = False,
+) -> None:
     session_id = status.get("id")
     if not isinstance(session_id, str):
         raise base.SmokeFailure("recording status omitted session id")
@@ -223,6 +330,20 @@ def validate_active_status(status: dict[str, Any], *, expected_frame_rate: int) 
         raise base.SmokeFailure("recording status dimensions are not even")
     if width > 3840 or height > 3840 or width * height > 3840 * 2160:
         raise base.SmokeFailure("recording status exceeded M1e resolution bounds")
+    audio = status.get("audio")
+    if not isinstance(audio, dict):
+        raise base.SmokeFailure("recording status omitted audio state")
+    if expected_system_audio:
+        if audio.get("requested") is not True or audio.get("state") not in {
+            "waiting",
+            "capturing",
+        }:
+            raise base.SmokeFailure("recording status did not expose requested system audio")
+        if audio.get("codec") != "aac":
+            raise base.SmokeFailure("recording status omitted AAC target identity")
+    else:
+        if audio.get("requested") is not False or audio.get("state") != "disabled":
+            raise base.SmokeFailure("video-only recording unexpectedly enabled system audio")
 
 
 def poll_status(
@@ -260,6 +381,8 @@ def compile_inspector() -> Path:
             "AVFoundation",
             "-framework",
             "CoreMedia",
+            "-framework",
+            "AudioToolbox",
         ],
         check=False,
         capture_output=True,
@@ -301,6 +424,8 @@ def validate_completed(
     expected_source_kind: str,
     expected_frame_rate: int,
     minimum_duration: float,
+    expected_system_audio: bool = False,
+    minimum_audio_rms: float | None = None,
 ) -> dict[str, Any]:
     tool_name = "mupaw_recording_stop"
     status = base.parse_json_result(tool_result, tool_name)
@@ -313,6 +438,9 @@ def validate_completed(
         raise base.SmokeFailure("recording artifact sessionID mismatch")
     if artifact.get("format") != "mp4" or artifact.get("codec") != "h264":
         raise base.SmokeFailure("recording artifact omitted MP4/H.264 identity")
+    audio = artifact.get("audio")
+    if not isinstance(audio, dict):
+        raise base.SmokeFailure("recording artifact omitted audio metadata")
     source = artifact.get("source")
     if not isinstance(source, dict) or source.get("kind") != expected_source_kind:
         raise base.SmokeFailure("recording artifact source kind mismatch")
@@ -383,8 +511,49 @@ def validate_completed(
     inspection = inspect_mp4(path)
     if inspection.get("isPlayable") is not True:
         raise base.SmokeFailure("AVFoundation did not mark the MP4 playable")
-    if inspection.get("videoTrackCount") != 1 or inspection.get("audioTrackCount") != 0:
-        raise base.SmokeFailure("M1e MP4 must contain exactly one video track and no audio")
+    if inspection.get("videoTrackCount") != 1:
+        raise base.SmokeFailure("recording MP4 must contain exactly one video track")
+    if expected_system_audio:
+        if inspection.get("audioTrackCount") != 1:
+            raise base.SmokeFailure("M2a MP4 must contain one requested system-audio track")
+        if audio.get("requested") is not True or audio.get("state") != "completed":
+            raise base.SmokeFailure("recording artifact did not complete requested system audio")
+        if audio.get("codec") != "aac" or audio.get("trackCount") != 1:
+            raise base.SmokeFailure("recording artifact AAC track metadata is invalid")
+        if audio.get("sampleRate") != 48000 or audio.get("channelCount") != 2:
+            raise base.SmokeFailure("recording artifact system-audio format is invalid")
+        audio_duration = audio.get("durationSeconds")
+        difference = audio.get("audioVideoDurationDifferenceSeconds")
+        if not isinstance(audio_duration, (int, float)) or audio_duration <= 0:
+            raise base.SmokeFailure("recording artifact audio duration is invalid")
+        if not isinstance(difference, (int, float)) or difference > 0.25:
+            raise base.SmokeFailure("recording artifact audio/video duration difference is too large")
+        audio_codec = str(inspection.get("audioCodecFourCC", "")).strip().lower()
+        if not audio_codec.startswith("aac"):
+            raise base.SmokeFailure(f"MP4 audio track is not AAC: {audio_codec!r}")
+        if inspection.get("audioSampleRate") != 48000 or inspection.get("audioChannelCount") != 2:
+            raise base.SmokeFailure("inspected AAC track format does not match metadata")
+        inspected_audio_duration = inspection.get("audioDurationSeconds")
+        if (
+            not isinstance(inspected_audio_duration, (int, float))
+            or abs(inspected_audio_duration - audio_duration) > 0.05
+        ):
+            raise base.SmokeFailure("inspected audio duration does not match artifact metadata")
+        if minimum_audio_rms is not None:
+            rms = inspection.get("audioRMS")
+            peak = inspection.get("audioPeak")
+            sample_count = inspection.get("decodedAudioSampleCount")
+            if not isinstance(rms, (int, float)) or rms < minimum_audio_rms:
+                raise base.SmokeFailure("captured system audio is silent or below the RMS threshold")
+            if not isinstance(peak, (int, float)) or peak <= minimum_audio_rms:
+                raise base.SmokeFailure("captured system audio peak is invalid")
+            if not isinstance(sample_count, int) or sample_count <= 0:
+                raise base.SmokeFailure("MP4 inspector decoded no audio samples")
+    else:
+        if inspection.get("audioTrackCount") != 0:
+            raise base.SmokeFailure("video-only M1e MP4 unexpectedly contains audio")
+        if audio.get("requested") is not False or audio.get("state") != "disabled":
+            raise base.SmokeFailure("video-only artifact unexpectedly reports system audio")
     if inspection.get("pixelWidth") != width or inspection.get("pixelHeight") != height:
         raise base.SmokeFailure("MP4 track dimensions do not match artifact metadata")
     inspected_duration = inspection.get("durationSeconds")
@@ -436,6 +605,7 @@ def run(executable: Path, *, include_full_screen: bool = False) -> dict[str, Any
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise base.SmokeFailure(f"MCP executable is missing or not executable: {executable}")
 
+    prepare_recording_fixture()
     process = subprocess.Popen(
         [str(executable)],
         stdin=subprocess.PIPE,
@@ -542,7 +712,7 @@ def run(executable: Path, *, include_full_screen: bool = False) -> dict[str, Any
             "capture_in_progress",
         )
         active = poll_status(process, 23, window_session)
-        validate_active_status(active, expected_frame_rate=30)
+        validate_active_status(active, expected_frame_rate=30, expected_system_audio=False)
         if active.get("elapsedDurationSeconds", 0) <= 0:
             raise base.SmokeFailure("active recording did not report elapsed duration")
         time.sleep(1.2)
@@ -712,6 +882,7 @@ def run(executable: Path, *, include_full_screen: bool = False) -> dict[str, Any
         stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
         if process.returncode not in (0, None) and stderr:
             print(stderr, file=sys.stderr)
+        stop_recording_fixture()
 
 
 def main() -> int:

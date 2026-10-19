@@ -19,6 +19,13 @@ struct RecordingSidebarGroup: View {
                 Toggle(L10n.string("toggle.include_cursor"), isOn: $model.includeCursor)
                     .disabled(model.hasActiveRecording)
 
+                Toggle(
+                    L10n.string("recording.system_audio"),
+                    isOn: $model.recordingSystemAudio
+                )
+                .disabled(model.hasActiveRecording)
+                .help(L10n.string("recording.system_audio.description"))
+
                 HStack {
                     Picker(L10n.string("recording.frame_rate"), selection: $model.recordingFrameRate) {
                         ForEach(MupawConstants.supportedRecordingFrameRates, id: \.self) { value in
@@ -107,6 +114,13 @@ struct RecordingSidebarGroup: View {
             .foregroundStyle(.secondary)
 
             HStack {
+                Label(
+                    L10n.recordingAudioState(status.audio.state),
+                    systemImage: status.audio.requested ? "speaker.wave.2.fill" : "speaker.slash.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
                 Button(role: .destructive) {
                     Task { await model.cancelCurrentRecording() }
                 } label: {
@@ -193,6 +207,11 @@ struct RecordingDetailView: View {
                     systemImage: "film.stack"
                 )
                 Label(L10n.recordingQuality(status.quality), systemImage: "dial.medium")
+                Label(
+                    L10n.recordingAudioState(status.audio.state),
+                    systemImage: status.audio.requested
+                        ? "speaker.wave.2.fill" : "speaker.slash.fill"
+                )
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -240,6 +259,40 @@ struct RecordingDetailView: View {
                     String(format: "%.2f fps", artifact.averageFrameRate)
                 )
                 metadataRow(L10n.string("recording.metadata.codec"), "H.264 · MP4")
+                metadataRow(
+                    L10n.string("recording.metadata.system_audio"),
+                    L10n.recordingAudioState(artifact.audio.state)
+                )
+                if artifact.audio.requested {
+                    metadataRow(
+                        L10n.string("recording.metadata.audio_codec"),
+                        L10n.string("recording.audio.codec.aac")
+                    )
+                    if let sampleRate = artifact.audio.sampleRate {
+                        metadataRow(
+                            L10n.string("recording.metadata.audio_sample_rate"),
+                            L10n.format("recording.audio.sample_rate.format", sampleRate)
+                        )
+                    }
+                    if let channelCount = artifact.audio.channelCount {
+                        metadataRow(
+                            L10n.string("recording.metadata.audio_channels"),
+                            L10n.format("recording.audio.channels.format", channelCount)
+                        )
+                    }
+                    if let audioDuration = artifact.audio.durationSeconds {
+                        metadataRow(
+                            L10n.string("recording.metadata.audio_duration"),
+                            RecordingTimeFormatter.preciseString(audioDuration)
+                        )
+                    }
+                    if let difference = artifact.audio.audioVideoDurationDifferenceSeconds {
+                        metadataRow(
+                            L10n.string("recording.metadata.audio_sync_difference"),
+                            RecordingTimeFormatter.preciseString(difference)
+                        )
+                    }
+                }
                 metadataRow(
                     L10n.string("metadata.bytes"),
                     ByteCountFormatter.string(

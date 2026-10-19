@@ -265,7 +265,7 @@
 "recording.quality" = "画质";
 "recording.quality.standard" = "标准";
 "recording.quality.high" = "高";
-"recording.region.description" = "请选择完全位于单个显示器内的区域。M1e 仅录制视频，不包含音频和摄像头。";
+"recording.region.description" = "请选择完全位于单个显示器内的区域。M2a 可选择录制系统声音，不包含麦克风和摄像头。";
 "recording.region.selecting" = "正在选择区域…";
 "recording.action.start" = "开始录屏";
 "recording.action.stop" = "停止录屏";
@@ -281,7 +281,7 @@
 "recording.metadata.codec" = "编码";
 "metadata.duration" = "时长";
 "recording.empty.title" = "还没有录屏";
-"recording.empty.description" = "选择显示器、窗口或区域，开始录制仅视频的 H.264 MP4。";
+"recording.empty.description" = "选择显示器、窗口或区域，开始录制可包含 AAC 系统声音的 H.264 MP4。";
 "recording.error.operation_in_progress.short" = "当前已有录屏正在进行。";
 "recording.error.source_required.format" = "录制模式 %@ 需要来源标识。";
 "recording.error.source_not_found.format" = "找不到录制来源：%@";
@@ -290,7 +290,7 @@
 "recording.error.invalid_region" = "录制区域无效。";
 "recording.error.cross_display_region" = "M1e 的区域录屏必须完全位于单个显示器内。";
 "recording.error.invalid_frame_rate.format" = "不支持的录制帧率：%d。";
-"recording.error.invalid_format" = "M1e 仅支持 H.264 MP4 视频录制。";
+"recording.error.invalid_format" = "M2a 支持 H.264 MP4，并可选择录制 AAC 系统声音。";
 "recording.error.operation_in_progress.format" = "录屏会话 %@ 已在进行中。";
 "recording.error.session_not_found.format" = "找不到录屏会话：%@";
 "recording.error.session_not_active.format" = "录屏会话当前未在录制：%@";
@@ -300,3 +300,20 @@
 "recording.error.finalization_failed.format" = "无法完成 MP4 文件：%@";
 "recording.source.display" = "录制的显示器";
 "recording.source.region" = "录制的区域";
+"recording.system_audio" = "录制系统声音";
+"recording.system_audio.description" = "通过 ScreenCaptureKit 添加一条 AAC 立体声音轨，不包含麦克风。";
+"recording.audio.state.disabled" = "未录制系统声音";
+"recording.audio.state.waiting" = "正在等待系统声音";
+"recording.audio.state.capturing" = "正在录制系统声音";
+"recording.audio.state.completed" = "系统声音已录制";
+"recording.audio.state.failed" = "系统声音录制失败";
+"recording.audio.state.cancelled" = "系统声音录制已取消";
+"recording.metadata.system_audio" = "系统声音";
+"recording.metadata.audio_codec" = "音频编码";
+"recording.metadata.audio_sample_rate" = "采样率";
+"recording.metadata.audio_channels" = "声道";
+"recording.metadata.audio_duration" = "音频时长";
+"recording.metadata.audio_sync_difference" = "音视频时长差";
+"recording.audio.codec.aac" = "AAC · MP4";
+"recording.audio.sample_rate.format" = "%d Hz";
+"recording.audio.channels.format" = "%d 声道";

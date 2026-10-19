@@ -132,6 +132,23 @@ enum L10n {
         }
     }
 
+    static func recordingAudioState(_ state: RecordingAudioState) -> String {
+        switch state {
+        case .disabled:
+            return string("recording.audio.state.disabled")
+        case .waiting:
+            return string("recording.audio.state.waiting")
+        case .capturing:
+            return string("recording.audio.state.capturing")
+        case .completed:
+            return string("recording.audio.state.completed")
+        case .failed:
+            return string("recording.audio.state.failed")
+        case .cancelled:
+            return string("recording.audio.state.cancelled")
+        }
+    }
+
     static func editKind(_ kind: ScreenshotEditKind) -> String {
         switch kind {
         case .arrow:

@@ -8,7 +8,9 @@ import MupawCore
 public enum RecordingArtifactEncoderError: Error, LocalizedError, Sendable {
     case fileMissing
     case invalidVideoTrack
+    case invalidAudioTrack
     case invalidDuration
+    case audioVideoDurationMismatch(Double)
     case previewFailed(String)
 
     public var errorDescription: String? {
@@ -17,8 +19,12 @@ public enum RecordingArtifactEncoderError: Error, LocalizedError, Sendable {
             "The completed MP4 file is missing."
         case .invalidVideoTrack:
             "The completed MP4 does not contain one valid video track."
+        case .invalidAudioTrack:
+            "The completed MP4 does not contain the requested AAC system-audio track."
         case .invalidDuration:
             "The completed MP4 has an invalid or empty duration."
+        case .audioVideoDurationMismatch(let difference):
+            "The completed MP4 audio and video durations differ by \(String(format: "%.3f", difference)) seconds."
         case .previewFailed(let message):
             "Mupaw could not create the recording preview: \(message)"
         }
@@ -58,7 +64,6 @@ enum RecordingArtifactEncoder {
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         guard isPlayable,
             tracks.count == 1,
-            audioTracks.isEmpty,
             let videoTrack = tracks.first
         else {
             throw RecordingArtifactEncoderError.invalidVideoTrack
@@ -80,6 +85,69 @@ enum RecordingArtifactEncoder {
             pixelHeight == expectedResolution.pixelHeight
         else {
             throw RecordingArtifactEncoderError.invalidVideoTrack
+        }
+
+        let videoTimeRange = try await videoTrack.load(.timeRange)
+        let videoDurationSeconds = CMTimeGetSeconds(videoTimeRange.duration)
+        guard videoDurationSeconds.isFinite, videoDurationSeconds > 0 else {
+            throw RecordingArtifactEncoderError.invalidDuration
+        }
+
+        let audioInfo: RecordingAudioInfo
+        if request.includeSystemAudio {
+            guard audioTracks.count == 1,
+                metrics.audioSampleBufferCount > 0,
+                let audioTrack = audioTracks.first
+            else {
+                throw RecordingArtifactEncoderError.invalidAudioTrack
+            }
+            let audioDescriptions = try await audioTrack.load(.formatDescriptions)
+            guard
+                audioDescriptions.contains(where: {
+                    CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEG4AAC
+                }),
+                let audioDescription = audioDescriptions.first,
+                let basic = CMAudioFormatDescriptionGetStreamBasicDescription(audioDescription)?.pointee
+            else {
+                throw RecordingArtifactEncoderError.invalidAudioTrack
+            }
+            let sampleRate = Int(basic.mSampleRate.rounded())
+            let channelCount = Int(basic.mChannelsPerFrame)
+            guard sampleRate == MupawConstants.recordingSystemAudioSampleRate,
+                channelCount == MupawConstants.recordingSystemAudioChannelCount
+            else {
+                throw RecordingArtifactEncoderError.invalidAudioTrack
+            }
+            let audioTimeRange = try await audioTrack.load(.timeRange)
+            let audioDurationSeconds = CMTimeGetSeconds(audioTimeRange.duration)
+            guard audioDurationSeconds.isFinite,
+                audioDurationSeconds >= MupawConstants.minimumCompletedRecordingDurationSeconds
+            else {
+                throw RecordingArtifactEncoderError.invalidAudioTrack
+            }
+            let durationDifference = abs(videoDurationSeconds - audioDurationSeconds)
+            guard
+                durationDifference
+                    <= MupawConstants.maximumRecordingAudioVideoDurationDifferenceSeconds
+            else {
+                throw RecordingArtifactEncoderError.audioVideoDurationMismatch(durationDifference)
+            }
+            audioInfo = RecordingAudioInfo(
+                requested: true,
+                state: .completed,
+                codec: .aac,
+                trackCount: 1,
+                sampleRate: sampleRate,
+                channelCount: channelCount,
+                durationSeconds: audioDurationSeconds,
+                sampleBufferCount: metrics.audioSampleBufferCount,
+                audioVideoDurationDifferenceSeconds: durationDifference
+            )
+        } else {
+            guard audioTracks.isEmpty, metrics.audioSampleBufferCount == 0 else {
+                throw RecordingArtifactEncoderError.invalidAudioTrack
+            }
+            audioInfo = .disabled
         }
 
         let previewImage: CGImage
@@ -120,6 +188,7 @@ enum RecordingArtifactEncoder {
             averageFrameRate: averageFrameRate,
             durationSeconds: durationSeconds,
             frameCount: metrics.frameCount,
+            audio: audioInfo,
             byteCount: byteCount,
             sha256: sha256,
             createdAt: startedAt,

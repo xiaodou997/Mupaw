@@ -52,8 +52,8 @@ Application-owned platform services:
 - ScreenCaptureKit source enumeration with display/window frames and scale metadata;
 - explicit full-screen and independent-window capture;
 - structured region capture split across displays and composed into one bounded image;
-- video-only H.264 MP4 display/window/single-display-region streaming through ScreenCaptureKit and AVAssetWriter;
-- stable recording session state, static-frame duration preservation, bounded resolution/bitrate/duration, owner-only files, and AVFoundation final artifact validation;
+- H.264 MP4 display/window/single-display-region streaming through ScreenCaptureKit and AVAssetWriter, with an optional 48 kHz stereo AAC system-audio track;
+- one shared video/audio timeline, bounded initial sample queues, static-frame duration preservation, bounded resolution/bitrate/duration, owner-only files, and AVFoundation final artifact validation;
 - image encoding and preview generation;
 - screen, microphone, camera, accessibility, and input-monitoring permission snapshots.
 
@@ -139,17 +139,19 @@ The style model contains a solid or two-color linear-gradient background, bounde
 
 `set_visual_style`, `apply_style_preset`, and `clear_visual_style` are normal `project_apply_edits` commands. They require the current revision, participate in atomic batches and persisted undo/redo, and `reset` clears style together with crop and edit objects. Invalid style geometry, colors, shadow values, or output allocations reject the whole batch.
 
-## M1e basic MP4 recording contract
+## M1e/M2a MP4 recording contract
 
-M1e records video-only H.264 MP4 through one `RecordingService` owned by `Mupaw.app`. The MCP helper only forwards authenticated structured requests. A human selects a region through the native AppKit overlay; an Agent provides `global_display_points` directly. Display, independent-window, and single-display region sources share the same service. Cross-display region composition remains screenshot-only in M1e.
+M1e established video-only H.264 MP4 through one `RecordingService` owned by `Mupaw.app`. M2a adds one optional ScreenCaptureKit system-audio path without changing the default: a missing `includeSystemAudio` field decodes as `false`, and legacy requests still produce exactly one video track and zero audio tracks. The MCP helper only forwards authenticated structured requests. A human selects a region through the native AppKit overlay; an Agent provides `global_display_points` directly. Display, independent-window, and single-display region sources share the same service. Cross-display region composition remains screenshot-only.
 
-`recording_start` validates a returned display/window source or a finite region, one of 15/30/60 fps, Standard/High bounded bitrate, and a sanitized destination under the owner-only `Recordings` directory. Recording resolution preserves aspect ratio, uses even dimensions, caps each side at 3,840 pixels, and caps total pixels at 3,840 × 2,160. ScreenCaptureKit provides BGRA sample buffers; AVAssetWriter encodes one real-time H.264 video track in an MP4 container. Audio capture is disabled.
+`recording_start` validates a returned display/window source or a finite region, one of 15/30/60 fps, Standard/High bounded video bitrate, optional system audio, and a sanitized destination under the owner-only `Recordings` directory. Recording resolution preserves aspect ratio, uses even dimensions, caps each side at 3,840 pixels, and caps total pixels at 3,840 × 2,160. ScreenCaptureKit provides BGRA video sample buffers and, when requested, 48 kHz stereo PCM system-audio sample buffers. AVAssetWriter encodes one real-time H.264 video track and one 192 kbps AAC track in the same MP4. Microphone capture remains disabled and current-process audio is excluded.
 
-Start returns a stable session UUID after the stream has started. `recording_status` reports starting/recording/stopping or retained terminal state with elapsed wall time, dimensions, frame count, source, and settings. Only one session may own recording; screenshot capture/selection and recording start/finalization are mutually exclusive. `recording_cancel` stops the stream and deletes the incomplete file. Stream/writer/source failures also delete partial data and retain a failed terminal status without an artifact.
+The writer buffers a bounded number of initial video/audio sample buffers, starts one AVAssetWriter session at the earliest valid presentation timestamp after all requested tracks are present, then appends both tracks on one serial sample queue. Audio format, sample count, start/end timestamps, and duration are tracked independently. If system audio is requested but no valid audio arrives, its format is wrong, or AAC writing fails, the session fails and removes the partial file instead of silently downgrading to video-only.
 
-Unchanged screen content may not produce repeated ScreenCaptureKit frames. The writer retains the most recent valid sample and appends one retimed terminal frame at stop, preserving wall-clock duration without inventing intermediate frame-rate claims. Stop does not report completion until AVAssetWriter finishes, AVFoundation confirms exactly one playable H.264 video track and zero audio tracks, dimensions and duration are valid, permissions are `0600`, byte count and SHA-256 are computed, and a bounded still preview is generated.
+Start returns a stable session UUID after the stream has started. `recording_status` reports starting/recording/stopping or retained terminal state with elapsed wall time, dimensions, frame count, source, settings, and audio state/sample progress. Only one session may own recording; screenshot capture/selection and recording start/finalization are mutually exclusive. `recording_cancel` stops the stream and deletes the incomplete file. Stream/writer/source failures also delete partial data and retain a failed terminal status without an artifact.
 
-The UI and MCP both call `RecordingService`. Completed metadata includes actual duration, frame count, requested and average frame rate, dimensions, bytes, SHA-256, file URL, creation/completion times, source descriptor, codec/container, and preview. M1e intentionally excludes system audio, microphone, camera, GIF, event overlays, and zoom editing.
+Unchanged screen content may not produce repeated ScreenCaptureKit frames. The writer retains the most recent valid video sample and appends one retimed terminal frame at stop, preserving wall-clock duration without inventing intermediate frame-rate claims. Stop does not report completion until AVAssetWriter finishes and AVFoundation confirms one playable H.264 video track. With audio disabled it also confirms zero audio tracks; with audio enabled it confirms exactly one AAC track, 48 kHz stereo format, positive audio duration, and an audio/video duration difference no greater than 250 ms. Dimensions, duration, permissions (`0600`), bytes, SHA-256, and a bounded still preview are validated before completion.
+
+The UI and MCP both call `RecordingService`. Completed metadata includes actual video/audio duration, frame and audio sample-buffer counts, requested and average frame rate, audio state/codec/sample rate/channels/synchronization difference, dimensions, bytes, SHA-256, file URL, creation/completion times, source descriptor, codec/container, and preview. M2a intentionally excludes microphone, audio mixing, camera, GIF, event overlays, and zoom editing.
 
 ## Local RPC security
 
@@ -178,6 +180,8 @@ The deterministic codec tests cover malformed structures and oversized-response 
 - M1c: Apple Vision OCR, point color picking, bounded region color summaries, UI overlays, and Agent analysis tools — complete.
 - M1d: non-destructive backgrounds, aspect canvases, padding, rounded cards, shadows, editable presets, and Agent style commands — complete.
 - M1e: application-owned video-only H.264 MP4 display/window/single-display-region recording with stable sessions, final artifact validation, UI, and Agent tools — complete.
-- M2: scrolling capture, partial-result stitching, and GIF.
-- M3: system audio, microphone, camera overlay, click and keystroke events, manual zoom timeline.
+- M2a: optional ScreenCaptureKit system audio encoded as validated 48 kHz stereo AAC on the shared MP4 timeline — complete.
+- S2: scrolling capture, partial-result stitching, and GIF.
+- M2b/M2c: microphone selection, then explicit system-audio/microphone mixing and level controls.
+- M3: camera overlay, click and keystroke events, manual zoom timeline.
 - M4: automatic focus/zoom suggestions and editable super-recording workflow.

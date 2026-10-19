@@ -265,7 +265,7 @@
 "recording.quality" = "Quality";
 "recording.quality.standard" = "Standard";
 "recording.quality.high" = "High";
-"recording.region.description" = "Select one region inside a single display. M1e records video only; audio and camera are not included.";
+"recording.region.description" = "Select one region inside a single display. M2a can optionally include system audio; microphone and camera are not included.";
 "recording.region.selecting" = "Selecting region…";
 "recording.action.start" = "Start Recording";
 "recording.action.stop" = "Stop Recording";
@@ -281,7 +281,7 @@
 "recording.metadata.codec" = "Codec";
 "metadata.duration" = "Duration";
 "recording.empty.title" = "No recording yet";
-"recording.empty.description" = "Choose a display, window, or region and start a video-only H.264 MP4 recording.";
+"recording.empty.description" = "Choose a display, window, or region and start an H.264 MP4 with optional AAC system audio.";
 "recording.error.operation_in_progress.short" = "Another recording is already in progress.";
 "recording.error.source_required.format" = "Recording mode %@ requires a source identifier.";
 "recording.error.source_not_found.format" = "The recording source was not found: %@";
@@ -290,7 +290,7 @@
 "recording.error.invalid_region" = "The recording region is invalid.";
 "recording.error.cross_display_region" = "M1e region recording must stay inside one display.";
 "recording.error.invalid_frame_rate.format" = "Unsupported recording frame rate: %d.";
-"recording.error.invalid_format" = "M1e supports only H.264 MP4 video recording.";
+"recording.error.invalid_format" = "M2a supports H.264 MP4 recording with optional AAC system audio.";
 "recording.error.operation_in_progress.format" = "Recording session %@ is already in progress.";
 "recording.error.session_not_found.format" = "The recording session was not found: %@";
 "recording.error.session_not_active.format" = "The recording session is not active: %@";
@@ -300,3 +300,20 @@
 "recording.error.finalization_failed.format" = "The MP4 could not be finalized: %@";
 "recording.source.display" = "Recorded Display";
 "recording.source.region" = "Recorded Region";
+"recording.system_audio" = "Record system audio";
+"recording.system_audio.description" = "Adds one AAC stereo track from ScreenCaptureKit. Microphone input is not included.";
+"recording.audio.state.disabled" = "System audio off";
+"recording.audio.state.waiting" = "Waiting for system audio";
+"recording.audio.state.capturing" = "Capturing system audio";
+"recording.audio.state.completed" = "System audio recorded";
+"recording.audio.state.failed" = "System audio failed";
+"recording.audio.state.cancelled" = "System audio cancelled";
+"recording.metadata.system_audio" = "System audio";
+"recording.metadata.audio_codec" = "Audio codec";
+"recording.metadata.audio_sample_rate" = "Sample rate";
+"recording.metadata.audio_channels" = "Channels";
+"recording.metadata.audio_duration" = "Audio duration";
+"recording.metadata.audio_sync_difference" = "Audio/video duration difference";
+"recording.audio.codec.aac" = "AAC · MP4";
+"recording.audio.sample_rate.format" = "%d Hz";
+"recording.audio.channels.format" = "%d channels";

@@ -20,6 +20,11 @@ public enum MupawConstants {
     public static let maximumRecordingDurationSeconds = 4 * 60 * 60
     public static let maximumRecordingHistoryCount = 20
     public static let minimumCompletedRecordingDurationSeconds = 0.20
+    public static let recordingSystemAudioSampleRate = 48_000
+    public static let recordingSystemAudioChannelCount = 2
+    public static let recordingSystemAudioBitRate = 192_000
+    public static let maximumRecordingAudioVideoDurationDifferenceSeconds = 0.25
+    public static let maximumPendingRecordingSamplesPerTrack = 240
     public static let screenshotProjectSchemaVersion = 1
     public static let maximumProjectObjects = 500
     public static let maximumProjectCommandsPerBatch = 1_000
