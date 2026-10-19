@@ -4,7 +4,7 @@
 
 Mupaw is a source-available native macOS 26+ screenshot and screen-recording application designed for both people and Agents.
 
-Mupaw currently includes the M0 foundation, M1a capture modes, M1b screenshot editing, M1c local screenshot analysis, M1d visual styling, M1e MP4 recording, M2a system audio, M2b microphone recording, and M2c controlled system-audio/microphone mixing:
+Mupaw currently includes the M0 foundation, M1a capture modes, M1b screenshot editing, M1c local screenshot analysis, M1d visual styling, M1e MP4 recording, M2a system audio, M2b microphone recording, M2c controlled system-audio/microphone mixing, and M3a camera picture-in-picture:
 
 - explicit full-screen, window, and region PNG capture;
 - a native AppKit region-selection overlay with cancellation and multi-display-aware geometry;
@@ -17,13 +17,14 @@ Mupaw currently includes the M0 foundation, M1a capture modes, M1b screenshot ed
 - non-destructive screenshot beautification with solid/gradient backgrounds, padding, output aspect ratios, rounded corners, bounded shadows, and editable presets;
 - application-owned H.264 MP4 recording for displays, independent windows, and structured single-display regions, with no audio, system audio, one selected microphone, or both sources mixed into one 48 kHz stereo AAC track;
 - independent system/microphone gains and mute controls that remain adjustable during recording, plus per-source live RMS/peak meters and stale-sample reporting;
+- permission-aware camera discovery and a selected camera composited into the single H.264 video track, with runtime visibility, corner, size, circle/rounded-rectangle shape, bounded corner radius, safe margin, and layout-preview controls;
 - structured Agent capture, recording, editing, OCR, and color-analysis tools that never simulate Mupaw UI clicks;
 - ScreenCaptureKit capture owned by one stably signed app identity;
 - a local authenticated RPC bridge and MCP stdio server;
 - English and Simplified Chinese localization from the first version;
 - deterministic models, tests, and local acceptance commands.
 
-Long scrolling screenshots, camera overlay, GIF export, click highlights, keystroke display, timeline editing, and automatic zoom remain planned. They are not part of M2c.
+Long scrolling screenshots, GIF export, click highlights, keystroke display, timeline editing, and manual/automatic zoom remain planned. They are not part of M3a.
 
 ## Screenshot modes
 
@@ -99,9 +100,9 @@ The human editor provides:
 
 Agents use `mupaw_project_ocr` and `mupaw_project_color_sample`. OCR reports the effective Apple Vision engine (`vision_fast` or `vision_accurate`), recognition-language settings, result-level detected languages, and a language code for every observation (`und` when confidence is insufficient). It returns at most 512 bounded observations and limits combined recognized text to 256 KiB. Color region analysis downsamples to at most 256 pixels on either axis and at most 65,536 sampled pixels. Project get, OCR, color sampling, preview, and export all revalidate the copied original before reading it.
 
-## MP4 recording and audio sources
+## MP4 recording, audio sources, and camera picture-in-picture
 
-M1e added one application-owned H.264 MP4 recording session using ScreenCaptureKit and AVAssetWriter. M2a added system audio, M2b added a selectable microphone, and M2c adds **System Audio + Microphone** mixing. Selecting a microphone source shows the current permission state and available devices. Source and device selection lock during recording, while both gains and mute switches remain adjustable.
+M1e added one application-owned H.264 MP4 recording session using ScreenCaptureKit and AVAssetWriter. M2a added system audio, M2b added a selectable microphone, M2c added **System Audio + Microphone** mixing, and M3a adds optional camera picture-in-picture. Audio source and microphone/camera device selections lock during recording. M2c audio gains/mutes and M3a camera visibility/layout/style controls remain adjustable through the same application-owned `RecordingService`.
 
 Human region recording reuses the native region selector. Agent region recording uses `global_display_points` directly. Regions must remain inside one display; cross-display screenshots continue to work, while cross-display video composition is deferred.
 
@@ -109,13 +110,17 @@ The canonical request field is `audio_source` with `none`, `system_audio`, `micr
 
 Mupaw enumerates microphone devices through AVFoundation and exposes stable device IDs, names, the current default, connection state, and microphone permission through `mupaw_microphones_list`. A microphone request may name an exact returned device or omit the device ID to use the current system default. Permission denial, an unknown device, or a device disconnect fails explicitly and removes partial output instead of silently switching devices or returning a video-only artifact.
 
+M3a similarly exposes camera permission and stable camera IDs through `mupaw_cameras_list`. A camera overlay request may use the current default camera or one exact returned ID, and configures visibility, one of four corners, three bounded sizes, a circle or rounded rectangle, a `0.0...0.5` rounded-rectangle corner-radius fraction, and a `0.0...0.15` safe-margin fraction. AVFoundation camera frames are aspect-filled, clipped, and CPU-composited with VideoToolbox and Core Graphics before AVAssetWriter so the completed file still contains exactly one H.264 video track. The camera must start within four seconds and remain live; device disconnect, a three-second frame stall, invalid frames, composition failure, or writer failure fails the whole session and removes partial output rather than silently dropping the overlay.
+
 During capture, ScreenCaptureKit provides separate video, system-audio, and microphone callbacks. Mupaw serializes them into an owner-only intermediate MOV, waits for every requested lane within a bounded startup period, and fails if a requested lane later stops producing samples. At stop, AVFoundation applies the recorded gain/mute event timeline and renders the requested source or mix into exactly one 48 kHz stereo AAC track in the final MP4. The intermediate file is deleted before success is reported.
 
 Active status includes current controls and separate system/microphone sample counts, formats, timestamps, RMS, peak, and stale flags. The UI renders smoothly animated meters for both inputs and an estimated controlled mixed output. `mupaw_recording_update_audio_controls` provides the same runtime control path to Agents without simulating UI actions.
 
+Camera-enabled status reports the selected device, current visibility/layout/style, source dimensions, input-frame count, most recent wall/source timestamps, stale state, and bounded camera control-event count. `mupaw_recording_update_camera_overlay` changes visibility, position, size, shape, corner radius, or safe margin without restarting capture or changing the device. Completed metadata records the final configuration and top-left-origin overlay rectangle. UI and MCP call the same `RecordingService`; Agents never simulate camera controls.
+
 Recording output is bounded to even dimensions, a maximum 3,840-pixel side and 3,840 × 2,160 total pixels. Very large sources are scaled down without changing aspect ratio. Files are stored under the owner-only `Recordings` directory and finalized only after Mupaw verifies:
 
-- one playable H.264 video track;
+- one playable H.264 video track, with any requested camera overlay already baked into its frames;
 - zero audio tracks for `none`, or exactly one 48 kHz stereo AAC track for every enabled single-source or mixed recording;
 - actual video/audio duration, dimensions, per-source sample counts and level summaries, selected device, final controls/control-event count, sample rate, channels, requested and average frame rate, and synchronization difference;
 - an audio/video duration difference no greater than 250 ms when audio is enabled;
@@ -123,7 +128,7 @@ Recording output is bounded to even dimensions, a maximum 3,840-pixel side and 3
 
 Static windows and displays may not produce repeated ScreenCaptureKit frames. Mupaw therefore holds the last video frame through the wall-clock stop time so a still screen produces a correctly timed MP4. Requested audio is never silently substituted or dropped.
 
-Agents use `mupaw_microphones_list`, `mupaw_recording_start`, `mupaw_recording_status`, `mupaw_recording_update_audio_controls`, `mupaw_recording_stop`, and `mupaw_recording_cancel`. UI and MCP calls use the same `RecordingService`; Agents never simulate microphone or recording controls.
+Agents use `mupaw_microphones_list`, `mupaw_cameras_list`, `mupaw_recording_start`, `mupaw_recording_status`, `mupaw_recording_update_audio_controls`, `mupaw_recording_update_camera_overlay`, `mupaw_recording_stop`, and `mupaw_recording_cancel`. UI and MCP calls use the same `RecordingService`; Agents never simulate microphone, camera, or recording controls.
 
 ## Requirements
 
@@ -173,6 +178,12 @@ Open the macOS microphone privacy pane:
 make open-microphone-settings
 ```
 
+Open the macOS camera privacy pane:
+
+```bash
+make open-camera-settings
+```
+
 Validate the MCP executable without requiring the app to be open:
 
 ```bash
@@ -204,13 +215,13 @@ make mcp-negative-smoke
 make rpc-negative-smoke
 ```
 
-Run the complete M2c acceptance sequence. It checks formatting and localization, runs all capture/editing/analysis/style/recording tests, rebuilds and restarts the stably signed app, performs negative and concurrency checks, validates M1a–M2b, then records a real mixed-audio MP4. The gate simultaneously captures deterministic system audio and genuine acoustic microphone input, exercises runtime gain/mute phases, verifies separate live levels, and confirms the final file contains exactly one non-silent 48 kHz stereo AAC track:
+Run the complete M3a acceptance sequence. It checks formatting and localization, runs all capture/editing/analysis/style/recording tests, rebuilds and restarts the stably signed app, performs negative and concurrency checks, validates M1a–M2c, then records real camera picture-in-picture through MCP. The M3a gate verifies camera permission/device discovery, bounded start/runtime configuration, live hide/show and layout updates, frame health, a single baked H.264 video track, visual distinction of the final overlay region, camera plus system-audio post-processing, metadata, cancellation cleanup, permissions, bytes, SHA-256, and playability:
 
 ```bash
-make m2c-acceptance
+make m3a-acceptance
 ```
 
-`make m2c-acceptance` expects the stable signing identity in `.mupaw.local.mk`, an unlocked desktop session, Screen & System Audio Recording permission, microphone permission, and a connected input device for `~/Applications/Mupaw.app`. The mixed smoke plays a deterministic tone through the system, captures the same physical output through the selected microphone, applies system-only, microphone-only, and rebalanced phases, and numerically distinguishes those phases in the final single AAC track. Historical `m0-acceptance` through `m2b-acceptance` gates remain available.
+`make m3a-acceptance` expects the stable signing identity in `.mupaw.local.mk`, an unlocked desktop session, Screen & System Audio Recording, microphone, and camera permissions, plus connected microphone and camera devices for `~/Applications/Mupaw.app`. Historical `m0-acceptance` through `m2c-acceptance` gates remain available; `make m2c-acceptance` remains the dedicated real mixed-audio gate.
 
 Focused flows can be rerun with:
 
@@ -222,6 +233,7 @@ make m1e-smoke
 make m2a-smoke
 make m2b-smoke
 make m2c-smoke
+make m3a-smoke
 ```
 
 To validate UI/MCP conflict handling, begin an interactive region selection and, before completing it, run:

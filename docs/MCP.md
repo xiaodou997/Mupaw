@@ -1,4 +1,4 @@
-# Mupaw MCP contract — M0 through M2c
+# Mupaw MCP contract — M0 through M3a
 
 The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards screenshot capture, MP4 recording sessions, editing, visual styling, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures or records independently, reads arbitrary source files, or drives Mupaw's UI.
 
@@ -10,7 +10,7 @@ Returns whether the app responds, app and protocol versions, process ID, and rel
 
 ### `mupaw_capabilities_get`
 
-Returns the implemented and planned capability matrix. M2c reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available. Recording supports no audio, system audio, one microphone, or controlled system-audio/microphone mixing with live levels.
+Returns the implemented and planned capability matrix. M3a reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `camera-overlay`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available. Recording supports all M2c audio modes plus an optional camera picture-in-picture overlay baked into the single H.264 video track.
 
 ### `mupaw_sources_list`
 
@@ -19,6 +19,10 @@ Returns active displays and eligible on-screen windows. Each source includes a s
 ### `mupaw_microphones_list`
 
 Returns the current microphone permission, system-default device ID, and available input devices with stable ID, localized name, manufacturer when available, default hint, and connection state. Agents must use an exact returned ID or omit the ID to request the current default; they must not invent microphone identifiers.
+
+### `mupaw_cameras_list`
+
+Returns the current camera permission, system-default device ID, and available cameras with stable ID, localized name, manufacturer when available, front/back/unspecified position, default hint, and connection state. Agents must use one exact returned ID or omit the ID to request the current default; they must not invent camera identifiers.
 
 ### `mupaw_screenshot_capture`
 
@@ -45,7 +49,7 @@ For full-screen and window capture, omit `region` and provide an exact `display:
 
 ## Recording tools
 
-M2c records H.264 MP4 with `none`, `system_audio`, `microphone`, or `system_audio_and_microphone`. Omitting audio fields preserves the M1e video-only contract. Legacy `include_system_audio` and `include_microphone` remain compatible; both true resolve to the mixed source. An explicit canonical source that contradicts either legacy flag returns `audio_mixing_not_supported` without creating a file. Camera, clicks, keystrokes, GIF, timeline editing, and zoom events are not included.
+M3a records H.264 MP4 with the M2c audio modes and an optional camera picture-in-picture overlay. Omitting audio and `camera_overlay` preserves the M1e video-only contract. Legacy audio flags remain compatible. A requested camera is composited into every output frame before encoding; the final MP4 still contains exactly one H.264 video track. Clicks, keystrokes, GIF, timeline editing, and zoom events are not included.
 
 ### `mupaw_recording_start`
 
@@ -103,6 +107,28 @@ Mixed-audio example:
 }
 ```
 
+Camera picture-in-picture example:
+
+```json
+{
+  "mode": "window",
+  "source_id": "window:1234",
+  "frame_rate": 30,
+  "quality": "standard",
+  "audio_source": "system_audio",
+  "camera_overlay": {
+    "enabled": true,
+    "camera_device_id": "exact-id-from-mupaw_cameras_list",
+    "visible": true,
+    "position": "bottom_right",
+    "size": "medium",
+    "shape": "circle",
+    "corner_radius": 0.12,
+    "margin": 0.025
+  }
+}
+```
+
 Structured region example:
 
 ```json
@@ -122,7 +148,7 @@ Structured region example:
 }
 ```
 
-`full_screen` and `window` require an exact source ID from `mupaw_sources_list`; `region` supplies a rectangle wholly inside one display. `frame_rate` is 15, 30, or 60; `quality` is `standard` or `high`. `microphone_device_id` is valid whenever the source uses microphone input and may be omitted to use the current default. Microphone permission must already be authorized. Gains are finite linear values from `0.0` through `2.0`, default to `1.0`, and mutes default to `false`. The result includes the stable session ID, source, dimensions, phase, elapsed duration, frame count, current controls, selected microphone identity, per-source sample counts/formats/timestamps/RMS/peak/stale state, and an estimated controlled mixed level.
+`full_screen` and `window` require an exact source ID from `mupaw_sources_list`; `region` supplies a rectangle wholly inside one display. `frame_rate` is 15, 30, or 60; `quality` is `standard` or `high`. `microphone_device_id` and `camera_device_id` may be omitted to use their current defaults and otherwise must exactly match discovery. Camera `position` is one of four corners, `size` is `small`, `medium`, or `large`, `shape` is `circle` or `rounded_rectangle`, `corner_radius` is `0.0...0.5`, and `margin` is `0.0...0.15`. The selected camera device locks after start; presentation fields remain adjustable through `mupaw_recording_update_camera_overlay`. Required permissions must already be authorized. The result includes the stable session ID, source, dimensions, phase, elapsed duration, output frame count, audio state, and—when requested—camera identity, current visibility/layout/style, control-event count, source dimensions, input frame count, last wall/source timestamps, and stale state.
 
 ### `mupaw_recording_status`
 
@@ -130,7 +156,7 @@ Structured region example:
 {"session_id": "recording-session-uuid"}
 ```
 
-Returns active or retained terminal state. Active phases are `starting`, `recording`, and `stopping`; terminal phases are `completed`, `failed`, and `cancelled`.
+Returns active or retained terminal state. Active phases are `starting`, `recording`, and `stopping`; terminal phases are `completed`, `failed`, and `cancelled`. Camera-enabled status reports `waiting` until the first valid frame, then `capturing`, plus frame count, last timestamps, source dimensions, overlay rectangle, and stale state.
 
 ### `mupaw_recording_update_audio_controls`
 
@@ -146,15 +172,31 @@ Returns active or retained terminal state. Active phases are `starting`, `record
 
 Updates any provided gain or mute fields on the active recording. At least one field is required. Source and microphone device selection cannot change after start. The returned status reflects the committed controls immediately; finalization applies the bounded control-event timeline to the single AAC output track.
 
+### `mupaw_recording_update_camera_overlay`
+
+```json
+{
+  "session_id": "recording-session-uuid",
+  "visible": false,
+  "position": "top_left",
+  "size": "large",
+  "shape": "rounded_rectangle",
+  "corner_radius": 0.3,
+  "margin": 0.08
+}
+```
+
+Updates any provided camera presentation fields on an active camera-enabled recording. At least one field is required. The selected camera device and the fact that camera capture was requested cannot change after start. Hidden mode keeps camera capture and frame-health enforcement active so the same device can be shown again. Each successful update appends a bounded control event and returns refreshed camera metadata immediately.
+
 ### `mupaw_recording_stop`
 
 ```json
 {"session_id": "recording-session-uuid"}
 ```
 
-Stops the stream and waits for capture finalization plus audio post-processing. Audio-enabled capture uses an owner-only intermediate MOV; Mupaw then applies the runtime control timeline with AVFoundation, writes one final AAC track into MP4, and deletes the intermediate before returning. A completed artifact includes the owner-only MP4 URL, H.264 identity, actual dimensions and duration, requested/average frame rate, frame count, audio source/state/device, controls/control-event count, per-source sample and level summaries, AAC track count, sample rate, channels, audio duration, synchronization difference, byte count, SHA-256, timestamps, and preview.
+Stops ScreenCaptureKit and the optional camera session, then waits for capture finalization and audio post-processing. Audio-enabled capture uses an owner-only intermediate MOV; Mupaw applies the runtime control timeline, writes one final AAC track into MP4, and deletes the intermediate before returning. A completed artifact includes the owner-only MP4 URL, one H.264 video-track identity, actual dimensions and duration, requested/average frame rate, output frame count, audio metadata, and camera identity/final visibility/layout/style/control-event count/source dimensions/input-frame count/last timestamps/final overlay rectangle when requested, plus bytes, SHA-256, timestamps, and preview.
 
-Completion requires one playable H.264 video track. `none` requires zero audio tracks; every enabled single-source or mixed mode requires exactly one 48 kHz stereo AAC track. Every requested source must provide valid samples, final audio must have positive duration, and audio/video duration difference must remain within 0.25 seconds. Missing permission, unavailable/disconnected devices, a source that fails to start or stalls, conversion/mix/write failure, or invalid final output fails explicitly and removes intermediate and final partial files.
+Completion requires one playable H.264 video track, with any requested camera already baked into it. `none` requires zero audio tracks; every enabled audio mode requires exactly one 48 kHz stereo AAC track. Every requested audio source and camera must provide valid samples/frames and remain live. Camera startup is bounded to four seconds and frame stalls to three seconds. Missing permission, unavailable/disconnected devices, source startup/stall, invalid camera frames, composition, conversion, mix, write, or final-validation failure removes intermediate and final partial files.
 
 ### `mupaw_recording_cancel`
 
@@ -162,7 +204,7 @@ Completion requires one playable H.264 video track. `none` requires zero audio t
 {"session_id": "recording-session-uuid"}
 ```
 
-Stops capture, cancels AVAssetWriter, deletes intermediate/final incomplete output, and returns `cancelled` without an artifact. Recording dimensions, queues, duration, control-event history, files, and terminal history remain bounded; static video receives the held final frame so wall-clock duration stays correct.
+Stops screen, audio, and camera capture, cancels AVAssetWriter, deletes intermediate/final incomplete output, and returns `cancelled` without an artifact. Recording dimensions, queues, duration, camera/audio health state, control-event history, files, and terminal history remain bounded; static video receives the held final original or composited frame so wall-clock duration stays correct.
 
 
 ## Screenshot project tools
@@ -399,8 +441,11 @@ Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project rev
 - `recording_failed`: no completed MP4 is claimed; inspect the accompanying stream/writer/finalization message;
 - `microphone_permission_required`: grant microphone permission to the signed Mupaw app before microphone recording;
 - `microphone_device_not_found`: refresh `mupaw_microphones_list` and use a connected returned device, or omit the ID for the current default;
+- `camera_permission_required`: grant camera permission to the signed Mupaw app before camera-overlay recording;
+- `camera_device_not_found`: refresh `mupaw_cameras_list` and use a connected returned device, or omit the ID for the current default;
 - `audio_mixing_not_supported`: remove explicit/legacy source contradictions; both legacy flags are valid and select M2c mixing;
 - `invalid_audio_controls`: provide at least one update field and keep gains within the finite `0.0...2.0` range;
+- `invalid_camera_overlay`: enable the overlay before naming a device, provide at least one runtime update field, and keep corner radius/margin within their finite bounded ranges;
 - `source_not_found`: refresh sources and use a returned source ID;
 - `invalid_region`: correct region coordinates or active-display intersection;
 - `artifact_not_found`: the project source file no longer exists;
@@ -429,8 +474,9 @@ make m1e-smoke
 make m2a-smoke
 make m2b-smoke
 make m2c-smoke
+make m3a-smoke
 make rpc-negative-smoke
-make m2c-acceptance
+make m3a-acceptance
 ```
 
 `make m1b-smoke` performs a real capture, project creation, atomic crop/arrow/text/mosaic batches, update/delete/add, stale-revision and invalid-edit checks, undo, redo, reset, restore, preview, export, file/hash/dimension validation, and original-image immutability verification.
@@ -446,6 +492,8 @@ make m2c-acceptance
 `make m2b-smoke` discovers the current default microphone, verifies legacy dual booleans now resolve to the M2c mixed source, rejects invalid devices without creating files, acoustically records a deterministic tone through the selected microphone, verifies one non-silent 48 kHz stereo AAC final track plus device metadata and synchronization, and confirms cancellation removes partial output.
 
 `make m2c-smoke` records a safe structured region while simultaneously capturing deterministic system audio and real acoustic microphone input. It validates separate live RMS/peak/timestamps, stale handling, invalid controls, explicit/legacy conflicts, runtime system-only/microphone-only/rebalanced phases, one final 48 kHz stereo AAC track, numerically distinct decoded phase RMS values, synchronization, hashes, permissions, playback, and cancellation cleanup.
+
+`make m3a-smoke` discovers the current camera; rejects invalid devices, contradictory disabled requests, out-of-range start layout, and out-of-range runtime updates; records a real camera picture-in-picture over the safe animated fixture; hides, relocates, resizes, reshapes, restyles, and shows the overlay again through the shared runtime tool; verifies non-stale live frames and bounded control-event metadata; independently decodes multiple final video frames to prove the final region is visually distinct and textured; validates exactly one H.264 video track; exercises camera plus real system audio through the M2c post-processing path; and confirms cancellation removes partial output.
 
 `make m1e-full-screen-smoke` additionally records the primary display. Cover it with non-sensitive test content first; this mode is intentionally separate from the default acceptance gate.
 

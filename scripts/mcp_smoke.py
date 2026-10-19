@@ -23,10 +23,12 @@ EXPECTED_TOOLS = {
     "mupaw_capabilities_get",
     "mupaw_sources_list",
     "mupaw_microphones_list",
+    "mupaw_cameras_list",
     "mupaw_screenshot_capture",
     "mupaw_recording_start",
     "mupaw_recording_status",
     "mupaw_recording_update_audio_controls",
+    "mupaw_recording_update_camera_overlay",
     "mupaw_recording_stop",
     "mupaw_recording_cancel",
     "mupaw_project_create",
@@ -584,12 +586,32 @@ def run(
             "microphone_gain",
             "system_audio_muted",
             "microphone_muted",
+            "camera_overlay",
         }
         if not isinstance(recording_properties, dict) or not required_recording_properties.issubset(
             recording_properties
         ):
-            raise SmokeFailure("mupaw_recording_start schema omitted M2c audio properties")
-        tool_schema_check["m2cRecordingProperties"] = sorted(required_recording_properties)
+            raise SmokeFailure("mupaw_recording_start schema omitted M2c/M3a properties")
+        tool_schema_check["m3aRecordingProperties"] = sorted(required_recording_properties)
+        camera_schema = recording_properties.get("camera_overlay")
+        camera_properties = (
+            camera_schema.get("properties") if isinstance(camera_schema, dict) else None
+        )
+        required_camera_properties = {
+            "enabled",
+            "camera_device_id",
+            "position",
+            "size",
+            "shape",
+            "visible",
+            "corner_radius",
+            "margin",
+        }
+        if not isinstance(camera_properties, dict) or not required_camera_properties.issubset(
+            camera_properties
+        ):
+            raise SmokeFailure("M3a camera_overlay schema is incomplete")
+        tool_schema_check["m3aCameraOverlayProperties"] = sorted(required_camera_properties)
 
         update_audio_tool = next(
             (
@@ -622,6 +644,42 @@ def run(
         ):
             raise SmokeFailure("M2c audio-control update schema is incomplete")
         tool_schema_check["m2cAudioControlProperties"] = sorted(required_update_properties)
+
+        update_camera_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict)
+                and item.get("name") == "mupaw_recording_update_camera_overlay"
+            ),
+            None,
+        )
+        update_camera_schema = (
+            update_camera_tool.get("inputSchema")
+            if isinstance(update_camera_tool, dict)
+            else None
+        )
+        update_camera_properties = (
+            update_camera_schema.get("properties")
+            if isinstance(update_camera_schema, dict)
+            else None
+        )
+        required_camera_update_properties = {
+            "session_id",
+            "visible",
+            "position",
+            "size",
+            "shape",
+            "corner_radius",
+            "margin",
+        }
+        if not isinstance(update_camera_properties, dict) or not required_camera_update_properties.issubset(
+            update_camera_properties
+        ):
+            raise SmokeFailure("M3a camera-overlay update schema is incomplete")
+        tool_schema_check["m3aCameraUpdateProperties"] = sorted(
+            required_camera_update_properties
+        )
         apply_tool = next(
             (
                 item

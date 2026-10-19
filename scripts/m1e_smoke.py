@@ -298,6 +298,7 @@ def start_recording(
     microphone_gain: float = 1.0,
     system_audio_muted: bool = False,
     microphone_muted: bool = False,
+    camera_overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     arguments: dict[str, Any] = {
         "mode": mode,
@@ -320,6 +321,8 @@ def start_recording(
         arguments["audio_source"] = audio_source
     if microphone_device_id is not None:
         arguments["microphone_device_id"] = microphone_device_id
+    if camera_overlay is not None:
+        arguments["camera_overlay"] = camera_overlay
     if region is not None:
         arguments["region"] = region
     result = base.parse_json_result(
@@ -642,6 +645,7 @@ def validate_completed(
         "sha256": expected_hash,
         "inspection": inspection,
         "audio": audio,
+        "camera": artifact.get("camera"),
     }
 
 
