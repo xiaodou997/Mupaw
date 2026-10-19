@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, display/window/microphone discovery, screenshot capture, H.264 MP4 recording sessions with no audio, one source, or controlled system-audio/microphone mixing, live audio controls and levels, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
+                        "Exposes status, display/window/microphone/camera discovery, screenshot capture, H.264 MP4 recording with controlled audio and optional baked-in camera picture-in-picture, live audio controls and levels, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -70,10 +70,17 @@ public enum CapabilityCatalog {
                 ),
                 .init(
                     id: "recording",
-                    title: "H.264 MP4 recording with controlled audio mixing",
+                    title: "H.264 MP4 recording with audio and camera picture-in-picture",
                     availability: .available,
                     detail:
-                        "Records an explicit display, independent window, or single-display structured region with no audio, system audio, one selected microphone, or both mixed into one 48 kHz stereo AAC track. Includes independent runtime gains and mute controls, per-source RMS/peak levels, device discovery, permission-aware start/status/update/stop/cancel, metadata, SHA-256, synchronization validation, and preview. Camera, event overlays, GIF, and zoom remain planned."
+                        "Records an explicit display, independent window, or single-display structured region with the M2c audio modes and an optional selected camera composited into the single H.264 track. Includes camera frame health, runtime visibility/layout/style controls, bounded camera control history, runtime audio controls, device discovery, permission-aware start/status/update/stop/cancel, SHA-256, synchronization validation, and preview. Click/keystroke overlays, GIF, timeline editing, and zoom remain planned."
+                ),
+                .init(
+                    id: "camera-overlay",
+                    title: "Camera picture-in-picture overlay",
+                    availability: .available,
+                    detail:
+                        "Discovers permission-aware camera devices and bakes one selected camera into the final H.264 video track. The device locks after start while visibility, corner, size, circle/rounded-rectangle shape, bounded corner radius, and safe margin remain adjustable through the shared recording service."
                 ),
                 .init(
                     id: "automatic-zoom",

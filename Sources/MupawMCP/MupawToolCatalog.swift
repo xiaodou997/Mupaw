@@ -27,6 +27,12 @@ internal enum MupawToolCatalog {
             inputSchema: emptyObjectSchema
         ),
         Tool(
+            name: "mupaw_cameras_list",
+            description:
+                "List available camera devices, stable device IDs, the system default device, connection state, position, and current camera permission. Use a returned camera_device_id; do not invent identifiers.",
+            inputSchema: emptyObjectSchema
+        ),
+        Tool(
             name: "mupaw_screenshot_capture",
             description:
                 "Capture an explicit full_screen, window, or structured region as PNG. full_screen and window require an exact source_id returned by mupaw_sources_list. region requires a rectangle in global_display_points and never simulates UI clicks. The result includes artifact metadata and a bounded preview.",
@@ -107,13 +113,13 @@ internal enum MupawToolCatalog {
         Tool(
             name: "mupaw_recording_start",
             description:
-                "Start one application-owned H.264 MP4 recording with no audio, system audio, one microphone, or a true system-audio-plus-microphone mix. Independent gains and mute states are applied to the final single AAC track. Camera, click, keystroke, GIF, and zoom features are not included in M2c.",
+                "Start one application-owned H.264 MP4 recording with optional audio and an optional camera picture-in-picture overlay baked into the single video track. The camera device is fixed for the session; visibility, corner, size, shape, corner radius, and safe margin remain adjustable through the shared runtime update tool. Click, keystroke, GIF, timeline, and zoom features are not included in M3a.",
             inputSchema: recordingStartSchema
         ),
         Tool(
             name: "mupaw_recording_status",
             description:
-                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, audio source/state/device/sample count/duration, and the completed artifact when available.",
+                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, audio state, camera device/layout/frame health when requested, and the completed artifact when available.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
@@ -123,9 +129,15 @@ internal enum MupawToolCatalog {
             inputSchema: recordingAudioControlUpdateSchema
         ),
         Tool(
+            name: "mupaw_recording_update_camera_overlay",
+            description:
+                "Update an active camera picture-in-picture overlay's visibility, corner, size, shape, corner radius, or safe margin without changing the selected camera device. The update is applied by the shared RecordingService and returned in refreshed status metadata.",
+            inputSchema: recordingCameraOverlayUpdateSchema
+        ),
+        Tool(
             name: "mupaw_recording_stop",
             description:
-                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, H.264 video validation, and one final 48 kHz AAC track containing the requested controlled source or mix are complete.",
+                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, one H.264 video track with any requested camera overlay baked in, and the requested final AAC track are validated.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
@@ -410,6 +422,77 @@ internal enum MupawToolCatalog {
                 "type": .string("boolean"),
                 "default": .bool(false),
             ]),
+            "camera_overlay": .object([
+                "type": .string("object"),
+                "description": .string(
+                    "Optional M3a camera picture-in-picture configuration. When enabled, use an exact camera_device_id from mupaw_cameras_list or omit it for the current default. The overlay is composited into the single H.264 video track."
+                ),
+                "properties": .object([
+                    "enabled": .object([
+                        "type": .string("boolean"),
+                        "default": .bool(false),
+                    ]),
+                    "camera_device_id": .object([
+                        "type": .string("string"),
+                        "description": .string(
+                            "Optional exact camera ID from mupaw_cameras_list. Omit to use the current default."
+                        ),
+                    ]),
+                    "visible": .object([
+                        "type": .string("boolean"),
+                        "default": .bool(true),
+                        "description": .string(
+                            "Whether the captured camera remains visible in the composited video. The camera keeps running while hidden so it can be shown again during the same session."
+                        ),
+                    ]),
+                    "position": .object([
+                        "type": .string("string"),
+                        "enum": .array([
+                            .string("top_left"),
+                            .string("top_right"),
+                            .string("bottom_left"),
+                            .string("bottom_right"),
+                        ]),
+                        "default": .string("bottom_right"),
+                    ]),
+                    "size": .object([
+                        "type": .string("string"),
+                        "enum": .array([
+                            .string("small"),
+                            .string("medium"),
+                            .string("large"),
+                        ]),
+                        "default": .string("medium"),
+                    ]),
+                    "shape": .object([
+                        "type": .string("string"),
+                        "enum": .array([
+                            .string("circle"),
+                            .string("rounded_rectangle"),
+                        ]),
+                        "default": .string("circle"),
+                    ]),
+                    "corner_radius": .object([
+                        "type": .string("number"),
+                        "minimum": .double(0),
+                        "maximum": .double(0.5),
+                        "default": .double(0.12),
+                        "description": .string(
+                            "Rounded-rectangle corner radius as a fraction of the overlay's shortest side. Ignored for circle shape."
+                        ),
+                    ]),
+                    "margin": .object([
+                        "type": .string("number"),
+                        "minimum": .double(0),
+                        "maximum": .double(0.15),
+                        "default": .double(0.025),
+                        "description": .string(
+                            "Safe margin from the selected output corner as a fraction of the output's shortest side."
+                        ),
+                    ]),
+                ]),
+                "additionalProperties": .bool(false),
+            ]),
             "exclude_mupaw_ui": .object([
                 "type": .string("boolean"),
                 "default": .bool(true),
@@ -448,6 +531,53 @@ internal enum MupawToolCatalog {
             "microphone_gain": audioGainProperty,
             "system_audio_muted": .object(["type": .string("boolean")]),
             "microphone_muted": .object(["type": .string("boolean")]),
+        ]),
+        "required": .array([.string("session_id")]),
+        "additionalProperties": .bool(false),
+    ])
+
+    private static let recordingCameraOverlayUpdateSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "session_id": .object([
+                "type": .string("string"),
+                "description": .string("Active recording session UUID."),
+            ]),
+            "visible": .object(["type": .string("boolean")]),
+            "position": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("top_left"),
+                    .string("top_right"),
+                    .string("bottom_left"),
+                    .string("bottom_right"),
+                ]),
+            ]),
+            "size": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("small"),
+                    .string("medium"),
+                    .string("large"),
+                ]),
+            ]),
+            "shape": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("circle"),
+                    .string("rounded_rectangle"),
+                ]),
+            ]),
+            "corner_radius": .object([
+                "type": .string("number"),
+                "minimum": .double(0),
+                "maximum": .double(0.5),
+            ]),
+            "margin": .object([
+                "type": .string("number"),
+                "minimum": .double(0),
+                "maximum": .double(0.15),
+            ]),
         ]),
         "required": .array([.string("session_id")]),
         "additionalProperties": .bool(false),

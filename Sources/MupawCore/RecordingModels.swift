@@ -41,6 +41,355 @@ public enum RecordingAudioSource: String, Codable, Sendable, CaseIterable, Hasha
     public var isMixed: Bool { self == .systemAudioAndMicrophone }
 }
 
+public enum RecordingCameraOverlayPosition: String, Codable, Sendable, CaseIterable, Hashable {
+    case topLeft = "top_left"
+    case topRight = "top_right"
+    case bottomLeft = "bottom_left"
+    case bottomRight = "bottom_right"
+}
+
+public enum RecordingCameraOverlaySize: String, Codable, Sendable, CaseIterable, Hashable {
+    case small
+    case medium
+    case large
+
+    fileprivate var widthFraction: Double {
+        switch self {
+        case .small:
+            0.18
+        case .medium:
+            0.24
+        case .large:
+            0.32
+        }
+    }
+}
+
+public enum RecordingCameraOverlayShape: String, Codable, Sendable, CaseIterable, Hashable {
+    case circle
+    case roundedRectangle = "rounded_rectangle"
+}
+
+public struct RecordingCameraOverlayConfiguration: Codable, Sendable, Equatable, Hashable {
+    public let enabled: Bool
+    public let deviceID: String?
+    public let visible: Bool
+    public let position: RecordingCameraOverlayPosition
+    public let size: RecordingCameraOverlaySize
+    public let shape: RecordingCameraOverlayShape
+    public let cornerRadius: Double
+    public let margin: Double
+
+    public init(
+        enabled: Bool = false,
+        deviceID: String? = nil,
+        visible: Bool? = nil,
+        position: RecordingCameraOverlayPosition = .bottomRight,
+        size: RecordingCameraOverlaySize = .medium,
+        shape: RecordingCameraOverlayShape = .circle,
+        cornerRadius: Double = 0.12,
+        margin: Double = 0.025
+    ) {
+        self.enabled = enabled
+        self.deviceID = deviceID
+        self.visible = visible ?? enabled
+        self.position = position
+        self.size = size
+        self.shape = shape
+        self.cornerRadius = cornerRadius
+        self.margin = margin
+    }
+
+    public var isValid: Bool {
+        let cornerRange =
+            MupawConstants.minimumRecordingCameraCornerRadius...MupawConstants.maximumRecordingCameraCornerRadius
+        let marginRange =
+            MupawConstants.minimumRecordingCameraMargin...MupawConstants.maximumRecordingCameraMargin
+        return cornerRadius.isFinite
+            && margin.isFinite
+            && cornerRange.contains(cornerRadius)
+            && marginRange.contains(margin)
+            && (enabled || (deviceID == nil && !visible))
+    }
+
+    public func applying(
+        _ update: RecordingCameraOverlayUpdateRequest
+    ) -> RecordingCameraOverlayConfiguration {
+        RecordingCameraOverlayConfiguration(
+            enabled: enabled,
+            deviceID: deviceID,
+            visible: update.visible ?? visible,
+            position: update.position ?? position,
+            size: update.size ?? size,
+            shape: update.shape ?? shape,
+            cornerRadius: update.cornerRadius ?? cornerRadius,
+            margin: update.margin ?? margin
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case deviceID
+        case visible
+        case position
+        case size
+        case shape
+        case cornerRadius
+        case margin
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        self.init(
+            enabled: enabled,
+            deviceID: try container.decodeIfPresent(String.self, forKey: .deviceID),
+            visible: try container.decodeIfPresent(Bool.self, forKey: .visible),
+            position: try container.decodeIfPresent(
+                RecordingCameraOverlayPosition.self,
+                forKey: .position
+            ) ?? .bottomRight,
+            size: try container.decodeIfPresent(RecordingCameraOverlaySize.self, forKey: .size)
+                ?? .medium,
+            shape: try container.decodeIfPresent(RecordingCameraOverlayShape.self, forKey: .shape)
+                ?? .circle,
+            cornerRadius: try container.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? 0.12,
+            margin: try container.decodeIfPresent(Double.self, forKey: .margin) ?? 0.025
+        )
+    }
+
+    public static let disabled = RecordingCameraOverlayConfiguration()
+}
+
+public enum RecordingCameraState: String, Codable, Sendable, CaseIterable, Hashable {
+    case disabled
+    case waiting
+    case capturing
+    case completed
+    case failed
+    case cancelled
+}
+
+public enum CameraDevicePosition: String, Codable, Sendable, CaseIterable, Hashable {
+    case front
+    case back
+    case unspecified
+}
+
+public struct CameraDeviceDescriptor: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    public let manufacturer: String?
+    public let position: CameraDevicePosition
+    public let isDefault: Bool
+    public let isConnected: Bool
+
+    public init(
+        id: String,
+        name: String,
+        manufacturer: String? = nil,
+        position: CameraDevicePosition,
+        isDefault: Bool,
+        isConnected: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.manufacturer = manufacturer
+        self.position = position
+        self.isDefault = isDefault
+        self.isConnected = isConnected
+    }
+}
+
+public struct CameraDeviceListResult: Codable, Sendable, Equatable {
+    public let refreshedAt: Date
+    public let permission: PermissionStatus
+    public let defaultDeviceID: String?
+    public let devices: [CameraDeviceDescriptor]
+
+    public init(
+        refreshedAt: Date = Date(),
+        permission: PermissionStatus,
+        defaultDeviceID: String?,
+        devices: [CameraDeviceDescriptor]
+    ) {
+        self.refreshedAt = refreshedAt
+        self.permission = permission
+        self.defaultDeviceID = defaultDeviceID
+        self.devices = devices
+    }
+}
+
+public struct RecordingCameraInfo: Codable, Sendable, Equatable {
+    public let requested: Bool
+    public let state: RecordingCameraState
+    public let deviceID: String?
+    public let deviceName: String?
+    public let visible: Bool?
+    public let position: RecordingCameraOverlayPosition?
+    public let size: RecordingCameraOverlaySize?
+    public let shape: RecordingCameraOverlayShape?
+    public let cornerRadius: Double?
+    public let margin: Double?
+    public let overlayRectPixels: CaptureRect?
+    public let sourcePixelWidth: Int?
+    public let sourcePixelHeight: Int?
+    public let frameCount: Int
+    public let lastFrameAt: Date?
+    public let lastSourceTimestampSeconds: Double?
+    public let isStale: Bool
+    public let controlEventCount: Int
+
+    public init(
+        requested: Bool,
+        state: RecordingCameraState,
+        deviceID: String? = nil,
+        deviceName: String? = nil,
+        visible: Bool? = nil,
+        position: RecordingCameraOverlayPosition? = nil,
+        size: RecordingCameraOverlaySize? = nil,
+        shape: RecordingCameraOverlayShape? = nil,
+        cornerRadius: Double? = nil,
+        margin: Double? = nil,
+        overlayRectPixels: CaptureRect? = nil,
+        sourcePixelWidth: Int? = nil,
+        sourcePixelHeight: Int? = nil,
+        frameCount: Int = 0,
+        lastFrameAt: Date? = nil,
+        lastSourceTimestampSeconds: Double? = nil,
+        isStale: Bool = false,
+        controlEventCount: Int = 0
+    ) {
+        self.requested = requested
+        self.state = state
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.visible = visible
+        self.position = position
+        self.size = size
+        self.shape = shape
+        self.cornerRadius = cornerRadius
+        self.margin = margin
+        self.overlayRectPixels = overlayRectPixels
+        self.sourcePixelWidth = sourcePixelWidth
+        self.sourcePixelHeight = sourcePixelHeight
+        self.frameCount = frameCount
+        self.lastFrameAt = lastFrameAt
+        self.lastSourceTimestampSeconds = lastSourceTimestampSeconds
+        self.isStale = isStale
+        self.controlEventCount = controlEventCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requested
+        case state
+        case deviceID
+        case deviceName
+        case visible
+        case position
+        case size
+        case shape
+        case cornerRadius
+        case margin
+        case overlayRectPixels
+        case sourcePixelWidth
+        case sourcePixelHeight
+        case frameCount
+        case lastFrameAt
+        case lastSourceTimestampSeconds
+        case isStale
+        case controlEventCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requested = try container.decodeIfPresent(Bool.self, forKey: .requested) ?? false
+        state = try container.decode(RecordingCameraState.self, forKey: .state)
+        deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
+        deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
+        visible = try container.decodeIfPresent(Bool.self, forKey: .visible)
+        position = try container.decodeIfPresent(RecordingCameraOverlayPosition.self, forKey: .position)
+        size = try container.decodeIfPresent(RecordingCameraOverlaySize.self, forKey: .size)
+        shape = try container.decodeIfPresent(RecordingCameraOverlayShape.self, forKey: .shape)
+        cornerRadius = try container.decodeIfPresent(Double.self, forKey: .cornerRadius)
+        margin = try container.decodeIfPresent(Double.self, forKey: .margin)
+        overlayRectPixels = try container.decodeIfPresent(CaptureRect.self, forKey: .overlayRectPixels)
+        sourcePixelWidth = try container.decodeIfPresent(Int.self, forKey: .sourcePixelWidth)
+        sourcePixelHeight = try container.decodeIfPresent(Int.self, forKey: .sourcePixelHeight)
+        frameCount = try container.decodeIfPresent(Int.self, forKey: .frameCount) ?? 0
+        lastFrameAt = try container.decodeIfPresent(Date.self, forKey: .lastFrameAt)
+        lastSourceTimestampSeconds = try container.decodeIfPresent(
+            Double.self,
+            forKey: .lastSourceTimestampSeconds
+        )
+        isStale = try container.decodeIfPresent(Bool.self, forKey: .isStale) ?? false
+        controlEventCount = try container.decodeIfPresent(Int.self, forKey: .controlEventCount) ?? 0
+    }
+
+    public static let disabled = RecordingCameraInfo(
+        requested: false,
+        state: .disabled
+    )
+}
+
+public enum RecordingCameraLayoutPlanningError: Error, Sendable, Equatable {
+    case invalidOutputSize
+    case invalidConfiguration
+}
+
+public enum RecordingCameraLayoutPlanner {
+    public static func makeRect(
+        outputPixelWidth: Int,
+        outputPixelHeight: Int,
+        configuration: RecordingCameraOverlayConfiguration
+    ) throws -> CaptureRect {
+        guard outputPixelWidth > 0, outputPixelHeight > 0 else {
+            throw RecordingCameraLayoutPlanningError.invalidOutputSize
+        }
+        guard configuration.isValid else {
+            throw RecordingCameraLayoutPlanningError.invalidConfiguration
+        }
+
+        let outputWidth = Double(outputPixelWidth)
+        let outputHeight = Double(outputPixelHeight)
+        let shortestSide = min(outputWidth, outputHeight)
+        let margin = floor(shortestSide * configuration.margin)
+        let maximumWidth = max(2, outputWidth - margin * 2)
+        let requestedWidth = max(96, floor(shortestSide * configuration.size.widthFraction))
+        let width = min(maximumWidth, requestedWidth)
+        let requestedHeight =
+            configuration.shape == .circle
+            ? width
+            : floor(width * 9 / 16)
+        let height = min(max(54, requestedHeight), max(2, outputHeight - margin * 2))
+
+        let x: Double
+        switch configuration.position {
+        case .topLeft, .bottomLeft:
+            x = margin
+        case .topRight, .bottomRight:
+            x = outputWidth - margin - width
+        }
+
+        let y: Double
+        switch configuration.position {
+        case .topLeft, .topRight:
+            y = margin
+        case .bottomLeft, .bottomRight:
+            y = outputHeight - margin - height
+        }
+
+        let rect = CaptureRect(x: x, y: y, width: width, height: height)
+        guard rect.isFinite, rect.hasPositiveArea,
+            rect.minX >= 0, rect.minY >= 0,
+            rect.maxX <= outputWidth, rect.maxY <= outputHeight
+        else {
+            throw RecordingCameraLayoutPlanningError.invalidOutputSize
+        }
+        return rect
+    }
+}
+
 public struct RecordingAudioControls: Codable, Sendable, Equatable, Hashable {
     public let systemAudioGain: Double
     public let microphoneGain: Double
@@ -340,6 +689,7 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
     public let microphoneGain: Double
     public let systemAudioMuted: Bool
     public let microphoneMuted: Bool
+    public let cameraOverlay: RecordingCameraOverlayConfiguration
     public let excludeMupawUI: Bool
     public let fileName: String?
 
@@ -373,6 +723,7 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         microphoneGain: Double = 1,
         systemAudioMuted: Bool = false,
         microphoneMuted: Bool = false,
+        cameraOverlay: RecordingCameraOverlayConfiguration = .disabled,
         excludeMupawUI: Bool = true,
         fileName: String? = nil
     ) {
@@ -404,6 +755,7 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         self.microphoneGain = microphoneGain
         self.systemAudioMuted = systemAudioMuted
         self.microphoneMuted = microphoneMuted
+        self.cameraOverlay = cameraOverlay
         self.excludeMupawUI = excludeMupawUI
         self.fileName = fileName
     }
@@ -424,6 +776,7 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         case microphoneGain
         case systemAudioMuted
         case microphoneMuted
+        case cameraOverlay
         case excludeMupawUI
         case fileName
     }
@@ -466,6 +819,11 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
             try container.decodeIfPresent(Bool.self, forKey: .systemAudioMuted) ?? false
         microphoneMuted =
             try container.decodeIfPresent(Bool.self, forKey: .microphoneMuted) ?? false
+        cameraOverlay =
+            try container.decodeIfPresent(
+                RecordingCameraOverlayConfiguration.self,
+                forKey: .cameraOverlay
+            ) ?? .disabled
         excludeMupawUI = try container.decodeIfPresent(Bool.self, forKey: .excludeMupawUI) ?? true
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
     }
@@ -517,6 +875,43 @@ public struct RecordingSessionRequest: Codable, Sendable, Equatable {
 
     public init(sessionID: String) {
         self.sessionID = sessionID
+    }
+}
+
+public struct RecordingCameraOverlayUpdateRequest: Codable, Sendable, Equatable {
+    public let sessionID: String
+    public let visible: Bool?
+    public let position: RecordingCameraOverlayPosition?
+    public let size: RecordingCameraOverlaySize?
+    public let shape: RecordingCameraOverlayShape?
+    public let cornerRadius: Double?
+    public let margin: Double?
+
+    public init(
+        sessionID: String,
+        visible: Bool? = nil,
+        position: RecordingCameraOverlayPosition? = nil,
+        size: RecordingCameraOverlaySize? = nil,
+        shape: RecordingCameraOverlayShape? = nil,
+        cornerRadius: Double? = nil,
+        margin: Double? = nil
+    ) {
+        self.sessionID = sessionID
+        self.visible = visible
+        self.position = position
+        self.size = size
+        self.shape = shape
+        self.cornerRadius = cornerRadius
+        self.margin = margin
+    }
+
+    public var hasChanges: Bool {
+        visible != nil
+            || position != nil
+            || size != nil
+            || shape != nil
+            || cornerRadius != nil
+            || margin != nil
     }
 }
 
@@ -628,6 +1023,7 @@ public struct RecordingArtifact: Codable, Sendable, Equatable, Identifiable {
     public let durationSeconds: Double
     public let frameCount: Int
     public let audio: RecordingAudioInfo
+    public let camera: RecordingCameraInfo
     public let byteCount: Int
     public let sha256: String
     public let createdAt: Date
@@ -648,6 +1044,7 @@ public struct RecordingArtifact: Codable, Sendable, Equatable, Identifiable {
         durationSeconds: Double,
         frameCount: Int,
         audio: RecordingAudioInfo = .disabled,
+        camera: RecordingCameraInfo = .disabled,
         byteCount: Int,
         sha256: String,
         createdAt: Date,
@@ -667,6 +1064,7 @@ public struct RecordingArtifact: Codable, Sendable, Equatable, Identifiable {
         self.durationSeconds = durationSeconds
         self.frameCount = frameCount
         self.audio = audio
+        self.camera = camera
         self.byteCount = byteCount
         self.sha256 = sha256
         self.createdAt = createdAt
@@ -687,6 +1085,7 @@ public struct RecordingSessionStatus: Codable, Sendable, Equatable, Identifiable
     public let pixelHeight: Int
     public let includeCursor: Bool
     public let audio: RecordingAudioInfo
+    public let camera: RecordingCameraInfo
     public let startedAt: Date
     public let updatedAt: Date
     public let elapsedDurationSeconds: Double
@@ -706,6 +1105,7 @@ public struct RecordingSessionStatus: Codable, Sendable, Equatable, Identifiable
         pixelHeight: Int,
         includeCursor: Bool,
         audio: RecordingAudioInfo = .disabled,
+        camera: RecordingCameraInfo = .disabled,
         startedAt: Date,
         updatedAt: Date,
         elapsedDurationSeconds: Double,
@@ -724,6 +1124,7 @@ public struct RecordingSessionStatus: Codable, Sendable, Equatable, Identifiable
         self.pixelHeight = pixelHeight
         self.includeCursor = includeCursor
         self.audio = audio
+        self.camera = camera
         self.startedAt = startedAt
         self.updatedAt = updatedAt
         self.elapsedDurationSeconds = elapsedDurationSeconds

@@ -54,6 +54,16 @@ struct RecordingSidebarGroup: View {
                     )
                 }
 
+                Toggle(
+                    L10n.string("recording.camera.overlay"),
+                    isOn: $model.recordingCameraEnabled
+                )
+                .disabled(model.hasActiveRecording)
+
+                if model.recordingCameraEnabled {
+                    cameraControls
+                }
+
                 HStack {
                     Picker(L10n.string("recording.frame_rate"), selection: $model.recordingFrameRate) {
                         ForEach(MupawConstants.supportedRecordingFrameRates, id: \.self) { value in
@@ -120,6 +130,9 @@ struct RecordingSidebarGroup: View {
                 || (model.recordingAudioSource.usesMicrophone
                     && (model.permissions.microphone != .authorized
                         || model.selectedMicrophoneDeviceID == nil))
+                || (model.recordingCameraEnabled
+                    && (model.permissions.camera != .authorized
+                        || model.selectedCameraDeviceID == nil))
         )
     }
 
@@ -159,6 +172,66 @@ struct RecordingSidebarGroup: View {
             set: {
                 model.recordingMicrophoneMuted = $0
                 model.scheduleRecordingAudioControlUpdate()
+            }
+        )
+    }
+
+    private var cameraVisibleBinding: Binding<Bool> {
+        Binding(
+            get: { model.recordingCameraVisible },
+            set: {
+                model.recordingCameraVisible = $0
+                model.scheduleRecordingCameraOverlayUpdate()
+            }
+        )
+    }
+
+    private var cameraPositionBinding: Binding<RecordingCameraOverlayPosition> {
+        Binding(
+            get: { model.recordingCameraPosition },
+            set: {
+                model.recordingCameraPosition = $0
+                model.scheduleRecordingCameraOverlayUpdate()
+            }
+        )
+    }
+
+    private var cameraSizeBinding: Binding<RecordingCameraOverlaySize> {
+        Binding(
+            get: { model.recordingCameraSize },
+            set: {
+                model.recordingCameraSize = $0
+                model.scheduleRecordingCameraOverlayUpdate()
+            }
+        )
+    }
+
+    private var cameraShapeBinding: Binding<RecordingCameraOverlayShape> {
+        Binding(
+            get: { model.recordingCameraShape },
+            set: {
+                model.recordingCameraShape = $0
+                model.scheduleRecordingCameraOverlayUpdate()
+            }
+        )
+    }
+
+    private var cameraCornerRadiusBinding: Binding<Double> {
+        Binding(
+            get: { model.recordingCameraCornerRadius },
+            set: {
+                model.recordingCameraCornerRadius = $0
+                model.scheduleRecordingCameraOverlayUpdate()
+            }
+        )
+    }
+
+    private var cameraMarginBinding: Binding<Double> {
+        Binding(
+            get: { model.recordingCameraMargin },
+            set: {
+                model.recordingCameraMargin = $0
+                model.scheduleRecordingCameraOverlayUpdate()
             }
         )
     }
@@ -248,6 +321,164 @@ struct RecordingSidebarGroup: View {
         }
     }
 
+    @ViewBuilder
+    private var cameraControls: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if model.permissions.camera == .authorized {
+                Picker(
+                    L10n.string("recording.camera.device"),
+                    selection: $model.selectedCameraDeviceID
+                ) {
+                    ForEach(model.cameraDevices) { device in
+                        Text(
+                            device.isDefault
+                                ? L10n.format("recording.camera.default.format", device.name)
+                                : device.name
+                        )
+                        .tag(Optional(device.id))
+                    }
+                }
+                .disabled(model.hasActiveRecording || model.cameraDevices.isEmpty)
+
+                HStack {
+                    Text(
+                        model.cameraDevices.isEmpty
+                            ? L10n.string("recording.camera.none")
+                            : L10n.string("recording.camera.description")
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(L10n.string("recording.camera.refresh")) {
+                        model.refreshCameraDevices()
+                    }
+                    .disabled(model.hasActiveRecording)
+                }
+
+                Toggle(
+                    L10n.string("recording.camera.visible"),
+                    isOn: cameraVisibleBinding
+                )
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 7) {
+                    GridRow {
+                        Text(L10n.string("recording.camera.position"))
+                        Picker(
+                            L10n.string("recording.camera.position"),
+                            selection: cameraPositionBinding
+                        ) {
+                            ForEach(RecordingCameraOverlayPosition.allCases, id: \.self) {
+                                position in
+                                Text(L10n.recordingCameraPosition(position)).tag(position)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    GridRow {
+                        Text(L10n.string("recording.camera.size"))
+                        Picker(
+                            L10n.string("recording.camera.size"),
+                            selection: cameraSizeBinding
+                        ) {
+                            ForEach(RecordingCameraOverlaySize.allCases, id: \.self) { size in
+                                Text(L10n.recordingCameraSize(size)).tag(size)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    GridRow {
+                        Text(L10n.string("recording.camera.shape"))
+                        Picker(
+                            L10n.string("recording.camera.shape"),
+                            selection: cameraShapeBinding
+                        ) {
+                            ForEach(RecordingCameraOverlayShape.allCases, id: \.self) { shape in
+                                Text(L10n.recordingCameraShape(shape)).tag(shape)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    GridRow {
+                        Text(L10n.string("recording.camera.corner_radius"))
+                        HStack(spacing: 8) {
+                            Slider(
+                                value: cameraCornerRadiusBinding,
+                                in: MupawConstants
+                                    .minimumRecordingCameraCornerRadius...MupawConstants
+                                    .maximumRecordingCameraCornerRadius,
+                                step: 0.01
+                            )
+                            Text(
+                                L10n.format(
+                                    "recording.camera.percent.format",
+                                    model.recordingCameraCornerRadius * 100
+                                )
+                            )
+                            .font(.system(.caption2, design: .monospaced))
+                            .frame(width: 42, alignment: .trailing)
+                        }
+                        .disabled(model.recordingCameraShape == .circle)
+                    }
+                    GridRow {
+                        Text(L10n.string("recording.camera.margin"))
+                        HStack(spacing: 8) {
+                            Slider(
+                                value: cameraMarginBinding,
+                                in: MupawConstants
+                                    .minimumRecordingCameraMargin...MupawConstants.maximumRecordingCameraMargin,
+                                step: 0.005
+                            )
+                            Text(
+                                L10n.format(
+                                    "recording.camera.percent.format",
+                                    model.recordingCameraMargin * 100
+                                )
+                            )
+                            .font(.system(.caption2, design: .monospaced))
+                            .frame(width: 42, alignment: .trailing)
+                        }
+                    }
+                }
+                .font(.caption)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(L10n.string("recording.camera.preview"))
+                        .font(.caption.weight(.semibold))
+                    RecordingCameraLayoutPreview(
+                        visible: model.recordingCameraVisible,
+                        position: model.recordingCameraPosition,
+                        size: model.recordingCameraSize,
+                        shape: model.recordingCameraShape,
+                        cornerRadius: model.recordingCameraCornerRadius,
+                        margin: model.recordingCameraMargin
+                    )
+                }
+            } else {
+                Text(
+                    L10n.format(
+                        "recording.camera.permission_status.format",
+                        L10n.permissionStatus(model.permissions.camera)
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                HStack {
+                    Button(L10n.string("recording.camera.request_permission")) {
+                        Task { await model.requestCameraPermission() }
+                    }
+                    Button(L10n.string("recording.camera.open_settings")) {
+                        model.openCameraPrivacySettings()
+                    }
+                }
+                .disabled(model.hasActiveRecording)
+            }
+        }
+        .padding(9)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private func activeControls(_ status: RecordingSessionStatus) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -276,6 +507,24 @@ struct RecordingSidebarGroup: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if status.camera.requested {
+                    Label(
+                        L10n.recordingCameraState(status.camera.state),
+                        systemImage: "video.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(status.camera.isStale ? .orange : .secondary)
+                }
+                if status.camera.requested {
+                    Text(
+                        status.camera.visible == true
+                            ? L10n.string("recording.camera.visible.on")
+                            : L10n.string("recording.camera.visible.off")
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
 
                 Button(role: .destructive) {
                     Task { await model.cancelCurrentRecording() }
@@ -327,6 +576,94 @@ struct RecordingSidebarGroup: View {
                     .font(.system(size: 6))
                     .foregroundStyle(.green)
             }
+        }
+    }
+}
+
+private struct RecordingCameraLayoutPreview: View {
+    let visible: Bool
+    let position: RecordingCameraOverlayPosition
+    let size: RecordingCameraOverlaySize
+    let shape: RecordingCameraOverlayShape
+    let cornerRadius: Double
+    let margin: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let shortest = min(proxy.size.width, proxy.size.height)
+            let extent = shortest * sizeFactor
+            let inset = shortest * CGFloat(margin)
+            let center = overlayCenter(
+                canvas: proxy.size,
+                extent: extent,
+                inset: inset
+            )
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(.secondary.opacity(0.12))
+                Image(systemName: "display")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.secondary.opacity(0.55))
+                if visible {
+                    Group {
+                        if shape == .circle {
+                            Circle()
+                                .fill(.tint.opacity(0.85))
+                        } else {
+                            RoundedRectangle(
+                                cornerRadius: max(1, extent * CGFloat(cornerRadius))
+                            )
+                            .fill(.tint.opacity(0.85))
+                        }
+                    }
+                    .frame(width: extent, height: extent)
+                    .overlay {
+                        Image(systemName: "person.fill")
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                    .position(center)
+                    .animation(.easeInOut(duration: 0.14), value: position)
+                    .animation(.easeInOut(duration: 0.14), value: size)
+                    .animation(.easeInOut(duration: 0.14), value: shape)
+                    .animation(.easeInOut(duration: 0.14), value: cornerRadius)
+                    .animation(.easeInOut(duration: 0.14), value: margin)
+                }
+            }
+        }
+        .frame(height: 92)
+        .accessibilityLabel(L10n.string("recording.camera.preview"))
+    }
+
+    private var sizeFactor: CGFloat {
+        switch size {
+        case .small:
+            return 0.25
+        case .medium:
+            return 0.34
+        case .large:
+            return 0.44
+        }
+    }
+
+    private func overlayCenter(
+        canvas: CGSize,
+        extent: CGFloat,
+        inset: CGFloat
+    ) -> CGPoint {
+        let leading = inset + extent / 2
+        let trailing = canvas.width - inset - extent / 2
+        let top = inset + extent / 2
+        let bottom = canvas.height - inset - extent / 2
+        switch position {
+        case .topLeft:
+            return CGPoint(x: leading, y: top)
+        case .topRight:
+            return CGPoint(x: trailing, y: top)
+        case .bottomLeft:
+            return CGPoint(x: leading, y: bottom)
+        case .bottomRight:
+            return CGPoint(x: trailing, y: bottom)
         }
     }
 }
@@ -434,6 +771,12 @@ struct RecordingDetailView: View {
                     L10n.recordingAudioState(status.audio.state),
                     systemImage: audioIcon(status.audio.source)
                 )
+                if status.camera.requested {
+                    Label(
+                        L10n.recordingCameraState(status.camera.state),
+                        systemImage: "video.fill"
+                    )
+                }
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -460,6 +803,31 @@ struct RecordingDetailView: View {
                     }
                 }
                 .frame(maxWidth: 620)
+            }
+            if status.camera.requested {
+                HStack(spacing: 12) {
+                    Label(
+                        status.camera.deviceName
+                            ?? L10n.string("recording.camera.device_unknown"),
+                        systemImage: "video.fill"
+                    )
+                    Label(
+                        L10n.format(
+                            "recording.camera.frames.format",
+                            status.camera.frameCount
+                        ),
+                        systemImage: "film.stack"
+                    )
+                    if status.camera.isStale {
+                        Label(
+                            L10n.string("recording.camera.frame_stale"),
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
                 Button(role: .destructive) {
@@ -572,6 +940,82 @@ struct RecordingDetailView: View {
                         L10n.string("recording.metadata.control_events"),
                         String(artifact.audio.controlEventCount)
                     )
+                }
+                metadataRow(
+                    L10n.string("recording.metadata.camera_state"),
+                    L10n.recordingCameraState(artifact.camera.state)
+                )
+                if artifact.camera.requested {
+                    if let deviceName = artifact.camera.deviceName {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_device"),
+                            deviceName
+                        )
+                    }
+                    if let position = artifact.camera.position {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_position"),
+                            L10n.recordingCameraPosition(position)
+                        )
+                    }
+                    if let size = artifact.camera.size {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_size"),
+                            L10n.recordingCameraSize(size)
+                        )
+                    }
+                    if let shape = artifact.camera.shape {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_shape"),
+                            L10n.recordingCameraShape(shape)
+                        )
+                    }
+                    metadataRow(
+                        L10n.string("recording.metadata.camera_visible"),
+                        artifact.camera.visible == true
+                            ? L10n.string("recording.camera.visible.on")
+                            : L10n.string("recording.camera.visible.off")
+                    )
+                    if let cornerRadius = artifact.camera.cornerRadius {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_corner_radius"),
+                            L10n.format("recording.camera.percent.format", cornerRadius * 100)
+                        )
+                    }
+                    if let margin = artifact.camera.margin {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_margin"),
+                            L10n.format("recording.camera.percent.format", margin * 100)
+                        )
+                    }
+                    metadataRow(
+                        L10n.string("recording.metadata.camera_control_events"),
+                        String(artifact.camera.controlEventCount)
+                    )
+                    metadataRow(
+                        L10n.string("recording.metadata.camera_frames"),
+                        String(artifact.camera.frameCount)
+                    )
+                    if let width = artifact.camera.sourcePixelWidth,
+                        let height = artifact.camera.sourcePixelHeight
+                    {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_source_size"),
+                            "\(width) × \(height)"
+                        )
+                    }
+                    if let rect = artifact.camera.overlayRectPixels {
+                        metadataRow(
+                            L10n.string("recording.metadata.camera_overlay_rect"),
+                            String(
+                                format: "x %.0f · y %.0f · %.0f × %.0f",
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height
+                            )
+                        )
+                    }
                 }
                 metadataRow(
                     L10n.string("metadata.bytes"),

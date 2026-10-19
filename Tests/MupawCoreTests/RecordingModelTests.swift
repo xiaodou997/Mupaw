@@ -55,6 +55,15 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertFalse(request.systemAudioMuted)
         XCTAssertFalse(request.microphoneMuted)
         XCTAssertTrue(request.audioControls.isValid)
+        XCTAssertFalse(request.cameraOverlay.enabled)
+        XCTAssertNil(request.cameraOverlay.deviceID)
+        XCTAssertEqual(request.cameraOverlay.position, .bottomRight)
+        XCTAssertEqual(request.cameraOverlay.size, .medium)
+        XCTAssertEqual(request.cameraOverlay.shape, .circle)
+        XCTAssertFalse(request.cameraOverlay.visible)
+        XCTAssertEqual(request.cameraOverlay.cornerRadius, 0.12)
+        XCTAssertEqual(request.cameraOverlay.margin, 0.025)
+        XCTAssertTrue(request.cameraOverlay.isValid)
         XCTAssertTrue(request.excludeMupawUI)
     }
 
@@ -253,6 +262,249 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(decoded.permission, value.permission)
         XCTAssertEqual(decoded.defaultDeviceID, value.defaultDeviceID)
         XCTAssertEqual(decoded.devices, value.devices)
+    }
+
+    func testCameraRequestAndDeviceDiscoveryRoundTrip() throws {
+        let request = RecordingRequest(
+            mode: .window,
+            sourceID: "window:42",
+            audioSource: .systemAudio,
+            cameraOverlay: RecordingCameraOverlayConfiguration(
+                enabled: true,
+                deviceID: "camera-1",
+                visible: false,
+                position: .topLeft,
+                size: .large,
+                shape: .roundedRectangle,
+                cornerRadius: 0.25,
+                margin: 0.08
+            )
+        )
+        let decodedRequest = try JSONDecoder.mupaw.decode(
+            RecordingRequest.self,
+            from: JSONEncoder.mupaw.encode(request)
+        )
+        XCTAssertEqual(decodedRequest, request)
+        XCTAssertTrue(decodedRequest.cameraOverlay.enabled)
+        XCTAssertEqual(decodedRequest.cameraOverlay.deviceID, "camera-1")
+        XCTAssertEqual(decodedRequest.cameraOverlay.position, .topLeft)
+        XCTAssertEqual(decodedRequest.cameraOverlay.size, .large)
+        XCTAssertEqual(decodedRequest.cameraOverlay.shape, .roundedRectangle)
+        XCTAssertFalse(decodedRequest.cameraOverlay.visible)
+        XCTAssertEqual(decodedRequest.cameraOverlay.cornerRadius, 0.25)
+        XCTAssertEqual(decodedRequest.cameraOverlay.margin, 0.08)
+
+        let devices = CameraDeviceListResult(
+            refreshedAt: Date(timeIntervalSince1970: 12_345),
+            permission: .authorized,
+            defaultDeviceID: "camera-1",
+            devices: [
+                CameraDeviceDescriptor(
+                    id: "camera-1",
+                    name: "Built-in Camera",
+                    manufacturer: "Apple",
+                    position: .front,
+                    isDefault: true,
+                    isConnected: true
+                )
+            ]
+        )
+        let decodedDevices = try JSONDecoder.mupaw.decode(
+            CameraDeviceListResult.self,
+            from: JSONEncoder.mupaw.encode(devices)
+        )
+        XCTAssertEqual(decodedDevices.permission, devices.permission)
+        XCTAssertEqual(decodedDevices.defaultDeviceID, devices.defaultDeviceID)
+        XCTAssertEqual(decodedDevices.devices, devices.devices)
+        XCTAssertEqual(decodedDevices.refreshedAt, devices.refreshedAt)
+    }
+
+    func testCameraInfoRoundTrip() throws {
+        let value = RecordingCameraInfo(
+            requested: true,
+            state: .completed,
+            deviceID: "camera-1",
+            deviceName: "Built-in Camera",
+            visible: true,
+            position: .bottomRight,
+            size: .medium,
+            shape: .circle,
+            cornerRadius: 0.2,
+            margin: 0.04,
+            overlayRectPixels: CaptureRect(x: 1_600, y: 760, width: 280, height: 280),
+            sourcePixelWidth: 1_280,
+            sourcePixelHeight: 720,
+            frameCount: 300,
+            lastFrameAt: Date(timeIntervalSince1970: 1_000),
+            lastSourceTimestampSeconds: 42.5,
+            isStale: false,
+            controlEventCount: 4
+        )
+        let decoded = try JSONDecoder.mupaw.decode(
+            RecordingCameraInfo.self,
+            from: JSONEncoder.mupaw.encode(value)
+        )
+        XCTAssertEqual(decoded, value)
+        XCTAssertFalse(RecordingCameraInfo.disabled.requested)
+        XCTAssertEqual(RecordingCameraInfo.disabled.state, .disabled)
+    }
+
+    func testCameraOverlayRuntimeUpdateAndLegacyDefaults() throws {
+        let initial = RecordingCameraOverlayConfiguration(
+            enabled: true,
+            deviceID: "camera-1",
+            position: .bottomRight,
+            size: .medium,
+            shape: .circle
+        )
+        let update = RecordingCameraOverlayUpdateRequest(
+            sessionID: "session-1",
+            visible: false,
+            position: .topLeft,
+            size: .large,
+            shape: .roundedRectangle,
+            cornerRadius: 0.3,
+            margin: 0.1
+        )
+        let updated = initial.applying(update)
+        XCTAssertTrue(update.hasChanges)
+        XCTAssertEqual(updated.deviceID, "camera-1")
+        XCTAssertFalse(updated.visible)
+        XCTAssertEqual(updated.position, .topLeft)
+        XCTAssertEqual(updated.size, .large)
+        XCTAssertEqual(updated.shape, .roundedRectangle)
+        XCTAssertEqual(updated.cornerRadius, 0.3)
+        XCTAssertEqual(updated.margin, 0.1)
+        XCTAssertTrue(updated.isValid)
+        XCTAssertFalse(RecordingCameraOverlayUpdateRequest(sessionID: "session-1").hasChanges)
+        XCTAssertFalse(
+            RecordingCameraOverlayConfiguration(
+                enabled: true,
+                cornerRadius: 0.51
+            ).isValid
+        )
+        XCTAssertFalse(
+            RecordingCameraOverlayConfiguration(
+                enabled: true,
+                margin: 0.151
+            ).isValid
+        )
+
+        let legacy = try JSONDecoder.mupaw.decode(
+            RecordingCameraOverlayConfiguration.self,
+            from: Data(
+                """
+                {
+                  "enabled": true,
+                  "deviceID": "legacy-camera",
+                  "position": "bottom_right",
+                  "size": "medium",
+                  "shape": "circle"
+                }
+                """.utf8
+            )
+        )
+        XCTAssertTrue(legacy.visible)
+        XCTAssertEqual(legacy.cornerRadius, 0.12)
+        XCTAssertEqual(legacy.margin, 0.025)
+        XCTAssertTrue(legacy.isValid)
+    }
+
+    func testCameraLayoutPlannerBoundsPositionsAndShapes() throws {
+        let width = 1_920
+        let height = 1_080
+        var rectangles: [RecordingCameraOverlayPosition: CaptureRect] = [:]
+        for position in RecordingCameraOverlayPosition.allCases {
+            for size in RecordingCameraOverlaySize.allCases {
+                for shape in RecordingCameraOverlayShape.allCases {
+                    let rect = try RecordingCameraLayoutPlanner.makeRect(
+                        outputPixelWidth: width,
+                        outputPixelHeight: height,
+                        configuration: RecordingCameraOverlayConfiguration(
+                            enabled: true,
+                            position: position,
+                            size: size,
+                            shape: shape
+                        )
+                    )
+                    XCTAssertTrue(rect.hasPositiveArea)
+                    XCTAssertGreaterThanOrEqual(rect.minX, 0)
+                    XCTAssertGreaterThanOrEqual(rect.minY, 0)
+                    XCTAssertLessThanOrEqual(rect.maxX, Double(width))
+                    XCTAssertLessThanOrEqual(rect.maxY, Double(height))
+                    if shape == .circle {
+                        XCTAssertEqual(rect.width, rect.height, accuracy: 0.001)
+                    } else {
+                        XCTAssertEqual(rect.width / rect.height, 16 / 9, accuracy: 0.05)
+                    }
+                    if size == .medium, shape == .circle {
+                        rectangles[position] = rect
+                    }
+                }
+            }
+        }
+
+        let topLeft = try XCTUnwrap(rectangles[.topLeft])
+        let topRight = try XCTUnwrap(rectangles[.topRight])
+        let bottomLeft = try XCTUnwrap(rectangles[.bottomLeft])
+        let bottomRight = try XCTUnwrap(rectangles[.bottomRight])
+        XCTAssertLessThan(topLeft.minX, topRight.minX)
+        XCTAssertLessThan(bottomLeft.minX, bottomRight.minX)
+        XCTAssertLessThan(topLeft.minY, bottomLeft.minY)
+        XCTAssertLessThan(topRight.minY, bottomRight.minY)
+    }
+
+    func testCameraLayoutPlannerUsesBoundedSafeMargin() throws {
+        let flush = try RecordingCameraLayoutPlanner.makeRect(
+            outputPixelWidth: 1_920,
+            outputPixelHeight: 1_080,
+            configuration: RecordingCameraOverlayConfiguration(
+                enabled: true,
+                position: .topLeft,
+                margin: 0
+            )
+        )
+        let inset = try RecordingCameraLayoutPlanner.makeRect(
+            outputPixelWidth: 1_920,
+            outputPixelHeight: 1_080,
+            configuration: RecordingCameraOverlayConfiguration(
+                enabled: true,
+                position: .topLeft,
+                margin: 0.1
+            )
+        )
+        XCTAssertGreaterThan(inset.minX, flush.minX)
+        XCTAssertGreaterThan(inset.minY, flush.minY)
+    }
+
+    func testCameraLayoutPlannerRejectsInvalidOutput() {
+        XCTAssertThrowsError(
+            try RecordingCameraLayoutPlanner.makeRect(
+                outputPixelWidth: 0,
+                outputPixelHeight: 1_080,
+                configuration: RecordingCameraOverlayConfiguration(enabled: true)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? RecordingCameraLayoutPlanningError,
+                .invalidOutputSize
+            )
+        }
+        XCTAssertThrowsError(
+            try RecordingCameraLayoutPlanner.makeRect(
+                outputPixelWidth: 1_920,
+                outputPixelHeight: 1_080,
+                configuration: RecordingCameraOverlayConfiguration(
+                    enabled: true,
+                    margin: 0.2
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? RecordingCameraLayoutPlanningError,
+                .invalidConfiguration
+            )
+        }
     }
 
     func testResolutionPlannerPreservesAspectAndBoundsSixK() throws {

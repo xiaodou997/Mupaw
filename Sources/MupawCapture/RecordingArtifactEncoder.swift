@@ -9,6 +9,7 @@ public enum RecordingArtifactEncoderError: Error, LocalizedError, Sendable {
     case fileMissing
     case invalidVideoTrack
     case invalidAudioTrack
+    case invalidCameraMetadata
     case invalidDuration
     case audioVideoDurationMismatch(Double)
     case previewFailed(String)
@@ -21,6 +22,8 @@ public enum RecordingArtifactEncoderError: Error, LocalizedError, Sendable {
             "The completed MP4 does not contain one valid video track."
         case .invalidAudioTrack:
             "The completed MP4 does not contain the requested valid AAC audio track."
+        case .invalidCameraMetadata:
+            "The completed MP4 does not contain valid camera overlay metadata."
         case .invalidDuration:
             "The completed MP4 has an invalid or empty duration."
         case .audioVideoDurationMismatch(let difference):
@@ -37,6 +40,7 @@ enum RecordingArtifactEncoder {
         source: CaptureSourceDescriptor,
         request: RecordingRequest,
         microphoneDevice: MicrophoneDeviceDescriptor?,
+        cameraDevice: CameraDeviceDescriptor?,
         fileURL: URL,
         expectedResolution: RecordingResolution,
         metrics: RecordingFrameMetrics,
@@ -173,6 +177,56 @@ enum RecordingArtifactEncoder {
             audioInfo = .disabled
         }
 
+        let cameraInfo: RecordingCameraInfo
+        if request.cameraOverlay.enabled {
+            guard metrics.camera.requested,
+                metrics.camera.frameCount > 0,
+                let cameraDevice,
+                let lastFrameAt = metrics.camera.lastFrameAt
+            else {
+                throw RecordingArtifactEncoderError.invalidCameraMetadata
+            }
+            let configuration = metrics.camera.configuration
+            guard configuration.enabled, configuration.isValid else {
+                throw RecordingArtifactEncoderError.invalidCameraMetadata
+            }
+            let overlayRect: CaptureRect
+            do {
+                overlayRect = try RecordingCameraLayoutPlanner.makeRect(
+                    outputPixelWidth: pixelWidth,
+                    outputPixelHeight: pixelHeight,
+                    configuration: configuration
+                )
+            } catch {
+                throw RecordingArtifactEncoderError.invalidCameraMetadata
+            }
+            cameraInfo = RecordingCameraInfo(
+                requested: true,
+                state: .completed,
+                deviceID: cameraDevice.id,
+                deviceName: cameraDevice.name,
+                visible: configuration.visible,
+                position: configuration.position,
+                size: configuration.size,
+                shape: configuration.shape,
+                cornerRadius: configuration.cornerRadius,
+                margin: configuration.margin,
+                overlayRectPixels: overlayRect,
+                sourcePixelWidth: metrics.camera.sourcePixelWidth,
+                sourcePixelHeight: metrics.camera.sourcePixelHeight,
+                frameCount: metrics.camera.frameCount,
+                lastFrameAt: lastFrameAt,
+                lastSourceTimestampSeconds: metrics.camera.lastSourceTimestampSeconds,
+                isStale: false,
+                controlEventCount: metrics.camera.controlEvents.count
+            )
+        } else {
+            guard !metrics.camera.requested, metrics.camera.frameCount == 0 else {
+                throw RecordingArtifactEncoderError.invalidCameraMetadata
+            }
+            cameraInfo = .disabled
+        }
+
         let previewImage: CGImage
         do {
             let generator = AVAssetImageGenerator(asset: asset)
@@ -212,6 +266,7 @@ enum RecordingArtifactEncoder {
             durationSeconds: durationSeconds,
             frameCount: metrics.frameCount,
             audio: audioInfo,
+            camera: cameraInfo,
             byteCount: byteCount,
             sha256: sha256,
             createdAt: startedAt,

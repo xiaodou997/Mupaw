@@ -25,9 +25,13 @@ public enum RecordingServiceError: Error, LocalizedError, Sendable {
     case invalidFormat
     case audioMixingNotSupported
     case invalidAudioControls
+    case invalidCameraOverlay
     case microphonePermissionRequired(PermissionStatus)
     case microphoneDeviceNotFound(String)
     case microphoneDisconnected(String)
+    case cameraPermissionRequired(PermissionStatus)
+    case cameraDeviceNotFound(String)
+    case cameraDisconnected(String)
     case operationInProgress(String)
     case sessionNotFound(String)
     case sessionNotActive(String)
@@ -62,6 +66,8 @@ public enum RecordingServiceError: Error, LocalizedError, Sendable {
             recordingLocalizedString("recording.error.audio_mixing_not_supported")
         case .invalidAudioControls:
             recordingLocalizedString("recording.error.invalid_audio_controls")
+        case .invalidCameraOverlay:
+            recordingLocalizedString("recording.error.invalid_camera_overlay")
         case .microphonePermissionRequired(let status):
             recordingLocalizedFormat(
                 "recording.error.microphone_permission_required.format",
@@ -74,6 +80,18 @@ public enum RecordingServiceError: Error, LocalizedError, Sendable {
             )
         case .microphoneDisconnected(let name):
             recordingLocalizedFormat("recording.error.microphone_disconnected.format", name)
+        case .cameraPermissionRequired(let status):
+            recordingLocalizedFormat(
+                "recording.error.camera_permission_required.format",
+                status.rawValue
+            )
+        case .cameraDeviceNotFound(let identifier):
+            recordingLocalizedFormat(
+                "recording.error.camera_device_not_found.format",
+                identifier
+            )
+        case .cameraDisconnected(let name):
+            recordingLocalizedFormat("recording.error.camera_disconnected.format", name)
         case .operationInProgress(let identifier):
             recordingLocalizedFormat("recording.error.operation_in_progress.format", identifier)
         case .sessionNotFound(let identifier):
@@ -120,7 +138,10 @@ public final class RecordingService {
         var phase: RecordingPhase
         var watchdog: Task<Void, Never>?
         let microphoneDevice: MicrophoneDeviceDescriptor?
+        let cameraCaptureSession: RecordingCameraCaptureSession?
+        let cameraDevice: CameraDeviceDescriptor?
         var microphoneDisconnectObserver: NSObjectProtocol?
+        var cameraDisconnectObserver: NSObjectProtocol?
 
         init(
             id: String,
@@ -134,7 +155,9 @@ public final class RecordingService {
             fileURL: URL,
             startedAt: Date,
             phase: RecordingPhase,
-            microphoneDevice: MicrophoneDeviceDescriptor?
+            microphoneDevice: MicrophoneDeviceDescriptor?,
+            cameraCaptureSession: RecordingCameraCaptureSession?,
+            cameraDevice: CameraDeviceDescriptor?
         ) {
             self.id = id
             self.request = request
@@ -148,6 +171,8 @@ public final class RecordingService {
             self.startedAt = startedAt
             self.phase = phase
             self.microphoneDevice = microphoneDevice
+            self.cameraCaptureSession = cameraCaptureSession
+            self.cameraDevice = cameraDevice
         }
     }
 
@@ -161,6 +186,7 @@ public final class RecordingService {
     private let paths: MupawPaths
     private let fileManager: FileManager
     private let microphoneDeviceService: MicrophoneDeviceService
+    private let cameraDeviceService: CameraDeviceService
     private var active: ActiveRecording?
     private var terminalStatuses: [String: RecordingSessionStatus] = [:]
     private var terminalOrder: [String] = []
@@ -168,11 +194,13 @@ public final class RecordingService {
     public init(
         paths: MupawPaths,
         fileManager: FileManager = .default,
-        microphoneDeviceService: MicrophoneDeviceService = MicrophoneDeviceService()
+        microphoneDeviceService: MicrophoneDeviceService = MicrophoneDeviceService(),
+        cameraDeviceService: CameraDeviceService = CameraDeviceService()
     ) {
         self.paths = paths
         self.fileManager = fileManager
         self.microphoneDeviceService = microphoneDeviceService
+        self.cameraDeviceService = cameraDeviceService
     }
 
     public var hasActiveRecording: Bool {
@@ -209,6 +237,25 @@ public final class RecordingService {
             resolvedMicrophone = nil
         }
 
+        let resolvedCamera: (device: AVCaptureDevice, descriptor: CameraDeviceDescriptor)?
+        if request.cameraOverlay.enabled {
+            do {
+                resolvedCamera = try cameraDeviceService.resolveDevice(
+                    identifier: request.cameraOverlay.deviceID
+                )
+            } catch CameraDeviceServiceError.permissionRequired(let status) {
+                throw RecordingServiceError.cameraPermissionRequired(status)
+            } catch CameraDeviceServiceError.deviceNotFound(let identifier) {
+                throw RecordingServiceError.cameraDeviceNotFound(identifier)
+            } catch CameraDeviceServiceError.noDefaultDevice {
+                throw RecordingServiceError.cameraDeviceNotFound(
+                    request.cameraOverlay.deviceID ?? "system-default"
+                )
+            }
+        } else {
+            resolvedCamera = nil
+        }
+
         let sessionID = UUID().uuidString.lowercased()
         let prepared = try await prepareRecording(
             request: request,
@@ -230,7 +277,8 @@ public final class RecordingService {
                 frameRate: request.frameRate,
                 quality: request.quality,
                 audioSource: request.audioSource,
-                audioControls: request.audioControls
+                audioControls: request.audioControls,
+                cameraOverlay: request.cameraOverlay
             ) { [weak self] error in
                 Task { @MainActor [weak self] in
                     await self?.failActiveRecording(sessionID: sessionID, error: error)
@@ -278,6 +326,28 @@ public final class RecordingService {
             throw RecordingServiceError.streamFailed(error.localizedDescription)
         }
 
+        let cameraCaptureSession: RecordingCameraCaptureSession?
+        if let resolvedCamera {
+            do {
+                cameraCaptureSession = try RecordingCameraCaptureSession(
+                    device: resolvedCamera.device,
+                    onFrame: { [writer] sampleBuffer in
+                        writer.receiveCameraSampleBuffer(sampleBuffer)
+                    },
+                    onFailure: { [weak self] error in
+                        Task { @MainActor [weak self] in
+                            await self?.failActiveRecording(sessionID: sessionID, error: error)
+                        }
+                    }
+                )
+            } catch {
+                await writer.cancelAndDelete()
+                throw RecordingServiceError.streamFailed(error.localizedDescription)
+            }
+        } else {
+            cameraCaptureSession = nil
+        }
+
         let startedAt = Date()
         let active = ActiveRecording(
             id: sessionID,
@@ -291,7 +361,9 @@ public final class RecordingService {
             fileURL: fileURL,
             startedAt: startedAt,
             phase: .starting,
-            microphoneDevice: resolvedMicrophone?.descriptor
+            microphoneDevice: resolvedMicrophone?.descriptor,
+            cameraCaptureSession: cameraCaptureSession,
+            cameraDevice: resolvedCamera?.descriptor
         )
         self.active = active
         if let resolvedMicrophone {
@@ -310,8 +382,25 @@ public final class RecordingService {
                 }
             }
         }
+        if let resolvedCamera {
+            active.cameraDisconnectObserver = NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification,
+                object: resolvedCamera.device,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.failActiveRecording(
+                        sessionID: sessionID,
+                        error: RecordingServiceError.cameraDisconnected(
+                            resolvedCamera.descriptor.name
+                        )
+                    )
+                }
+            }
+        }
 
         do {
+            try cameraCaptureSession?.start()
             try await stream.startCapture()
             active.phase = .recording
             active.watchdog = Task { @MainActor [weak self] in
@@ -332,6 +421,10 @@ public final class RecordingService {
                         await self.failActiveRecording(sessionID: sessionID, error: error)
                         return
                     }
+                    if let error = current.writer.cameraHealthError() {
+                        await self.failActiveRecording(sessionID: sessionID, error: error)
+                        return
+                    }
                     if Date().timeIntervalSince(current.startedAt)
                         >= Double(MupawConstants.maximumRecordingDurationSeconds)
                     {
@@ -344,7 +437,8 @@ public final class RecordingService {
             }
             return status(for: active)
         } catch {
-            removeMicrophoneObserver(from: active)
+            cameraCaptureSession?.stop()
+            removeDeviceObservers(from: active)
             self.active = nil
             await writer.cancelAndDelete()
             let status = terminalStatus(
@@ -392,6 +486,44 @@ public final class RecordingService {
         return status(for: active)
     }
 
+    public func updateCameraOverlay(
+        _ request: RecordingCameraOverlayUpdateRequest
+    ) throws -> RecordingSessionStatus {
+        guard request.hasChanges else {
+            throw RecordingServiceError.invalidCameraOverlay
+        }
+        guard let active, active.id == request.sessionID else {
+            if self.active == nil {
+                throw RecordingServiceError.sessionNotFound(request.sessionID)
+            }
+            throw RecordingServiceError.sessionNotActive(request.sessionID)
+        }
+        guard active.phase == .starting || active.phase == .recording else {
+            throw RecordingServiceError.sessionNotActive(request.sessionID)
+        }
+        guard active.request.cameraOverlay.enabled else {
+            throw RecordingServiceError.invalidCameraOverlay
+        }
+        let current = active.writer.metricsSnapshot().camera.configuration
+        let updated = current.applying(request)
+        guard updated.isValid, updated.enabled,
+            updated.deviceID == current.deviceID
+        else {
+            throw RecordingServiceError.invalidCameraOverlay
+        }
+        do {
+            _ = try RecordingCameraLayoutPlanner.makeRect(
+                outputPixelWidth: active.resolution.pixelWidth,
+                outputPixelHeight: active.resolution.pixelHeight,
+                configuration: updated
+            )
+        } catch {
+            throw RecordingServiceError.invalidCameraOverlay
+        }
+        active.writer.updateCameraOverlay(updated)
+        return status(for: active)
+    }
+
     public func stopRecording(
         _ request: RecordingSessionRequest
     ) async throws -> RecordingSessionStatus {
@@ -414,6 +546,7 @@ public final class RecordingService {
         active.watchdog = nil
 
         do {
+            active.cameraCaptureSession?.stop()
             try await active.stream.stopCapture()
             let metrics = try await active.writer.finish()
             if active.request.audioSource.isEnabled {
@@ -431,6 +564,7 @@ public final class RecordingService {
                 source: active.source,
                 request: active.request,
                 microphoneDevice: active.microphoneDevice,
+                cameraDevice: active.cameraDevice,
                 fileURL: active.fileURL,
                 expectedResolution: active.resolution,
                 metrics: metrics,
@@ -449,18 +583,20 @@ public final class RecordingService {
                 pixelHeight: active.resolution.pixelHeight,
                 includeCursor: active.request.includeCursor,
                 audio: artifact.audio,
+                camera: artifact.camera,
                 startedAt: active.startedAt,
                 updatedAt: completedAt,
                 elapsedDurationSeconds: artifact.durationSeconds,
                 frameCount: artifact.frameCount,
                 artifact: artifact
             )
-            removeMicrophoneObserver(from: active)
+            removeDeviceObservers(from: active)
             self.active = nil
             remember(status)
             return status
         } catch {
-            removeMicrophoneObserver(from: active)
+            active.cameraCaptureSession?.stop()
+            removeDeviceObservers(from: active)
             await active.writer.cancelAndDelete()
             try? fileManager.removeItem(at: active.writerURL)
             try? fileManager.removeItem(at: active.fileURL)
@@ -495,8 +631,9 @@ public final class RecordingService {
         active.phase = .stopping
         active.watchdog?.cancel()
         active.watchdog = nil
+        active.cameraCaptureSession?.stop()
         try? await active.stream.stopCapture()
-        removeMicrophoneObserver(from: active)
+        removeDeviceObservers(from: active)
         await active.writer.cancelAndDelete()
         try? fileManager.removeItem(at: active.writerURL)
         try? fileManager.removeItem(at: active.fileURL)
@@ -508,8 +645,9 @@ public final class RecordingService {
 
     public func cancelActiveRecordingForShutdown() {
         guard let active else { return }
-        removeMicrophoneObserver(from: active)
+        removeDeviceObservers(from: active)
         active.watchdog?.cancel()
+        active.cameraCaptureSession?.stopImmediately()
         active.writer.cancelAndDeleteImmediately()
         try? fileManager.removeItem(at: active.writerURL)
         try? fileManager.removeItem(at: active.fileURL)
@@ -529,11 +667,20 @@ public final class RecordingService {
         guard request.audioControls.isValid else {
             throw RecordingServiceError.invalidAudioControls
         }
+        guard request.cameraOverlay.isValid else {
+            throw RecordingServiceError.invalidCameraOverlay
+        }
         if !request.audioSource.usesMicrophone,
             let identifier = request.microphoneDeviceID,
             !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             throw RecordingServiceError.microphoneDeviceNotFound(identifier)
+        }
+        if !request.cameraOverlay.enabled,
+            let identifier = request.cameraOverlay.deviceID,
+            !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            throw RecordingServiceError.cameraDeviceNotFound(identifier)
         }
         guard MupawConstants.supportedRecordingFrameRates.contains(request.frameRate) else {
             throw RecordingServiceError.invalidFrameRate(request.frameRate)
@@ -829,6 +976,7 @@ public final class RecordingService {
             pixelHeight: active.resolution.pixelHeight,
             includeCursor: active.request.includeCursor,
             audio: audioInfo(for: active, metrics: metrics, phase: active.phase),
+            camera: cameraInfo(for: active, metrics: metrics, phase: active.phase, now: now),
             startedAt: active.startedAt,
             updatedAt: now,
             elapsedDurationSeconds: max(
@@ -858,6 +1006,7 @@ public final class RecordingService {
             pixelHeight: active.resolution.pixelHeight,
             includeCursor: active.request.includeCursor,
             audio: audioInfo(for: active, metrics: metrics, phase: phase),
+            camera: cameraInfo(for: active, metrics: metrics, phase: phase, now: now),
             startedAt: active.startedAt,
             updatedAt: now,
             elapsedDurationSeconds: max(
@@ -931,6 +1080,56 @@ public final class RecordingService {
                 now: now
             ),
             controlEventCount: metrics.controlEvents.count
+        )
+    }
+
+    private func cameraInfo(
+        for active: ActiveRecording,
+        metrics: RecordingFrameMetrics,
+        phase: RecordingPhase,
+        now: Date
+    ) -> RecordingCameraInfo {
+        guard active.request.cameraOverlay.enabled else { return .disabled }
+        let state: RecordingCameraState =
+            switch phase {
+            case .starting, .recording, .stopping:
+                metrics.camera.frameCount > 0 ? .capturing : .waiting
+            case .completed:
+                .completed
+            case .failed:
+                .failed
+            case .cancelled:
+                .cancelled
+            }
+        let configuration = metrics.camera.configuration
+        let overlayRect = try? RecordingCameraLayoutPlanner.makeRect(
+            outputPixelWidth: active.resolution.pixelWidth,
+            outputPixelHeight: active.resolution.pixelHeight,
+            configuration: configuration
+        )
+        let stale =
+            metrics.camera.lastFrameAt.map {
+                now.timeIntervalSince($0) > MupawConstants.recordingCameraLevelStaleSeconds
+            } ?? false
+        return RecordingCameraInfo(
+            requested: true,
+            state: state,
+            deviceID: active.cameraDevice?.id,
+            deviceName: active.cameraDevice?.name,
+            visible: configuration.visible,
+            position: configuration.position,
+            size: configuration.size,
+            shape: configuration.shape,
+            cornerRadius: configuration.cornerRadius,
+            margin: configuration.margin,
+            overlayRectPixels: overlayRect,
+            sourcePixelWidth: metrics.camera.sourcePixelWidth,
+            sourcePixelHeight: metrics.camera.sourcePixelHeight,
+            frameCount: metrics.camera.frameCount,
+            lastFrameAt: metrics.camera.lastFrameAt,
+            lastSourceTimestampSeconds: metrics.camera.lastSourceTimestampSeconds,
+            isStale: stale,
+            controlEventCount: metrics.camera.controlEvents.count
         )
     }
 
@@ -1049,10 +1248,14 @@ public final class RecordingService {
 
     }
 
-    private func removeMicrophoneObserver(from active: ActiveRecording) {
+    private func removeDeviceObservers(from active: ActiveRecording) {
         if let observer = active.microphoneDisconnectObserver {
             NotificationCenter.default.removeObserver(observer)
             active.microphoneDisconnectObserver = nil
+        }
+        if let observer = active.cameraDisconnectObserver {
+            NotificationCenter.default.removeObserver(observer)
+            active.cameraDisconnectObserver = nil
         }
     }
 
@@ -1061,8 +1264,9 @@ public final class RecordingService {
         active.phase = .stopping
         active.watchdog?.cancel()
         active.watchdog = nil
+        active.cameraCaptureSession?.stop()
         try? await active.stream.stopCapture()
-        removeMicrophoneObserver(from: active)
+        removeDeviceObservers(from: active)
         await active.writer.cancelAndDelete()
         try? fileManager.removeItem(at: active.writerURL)
         try? fileManager.removeItem(at: active.fileURL)

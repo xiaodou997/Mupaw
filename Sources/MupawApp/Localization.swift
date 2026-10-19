@@ -162,6 +162,56 @@ enum L10n {
         }
     }
 
+    static func recordingCameraPosition(_ position: RecordingCameraOverlayPosition) -> String {
+        switch position {
+        case .topLeft:
+            return string("recording.camera.position.top_left")
+        case .topRight:
+            return string("recording.camera.position.top_right")
+        case .bottomLeft:
+            return string("recording.camera.position.bottom_left")
+        case .bottomRight:
+            return string("recording.camera.position.bottom_right")
+        }
+    }
+
+    static func recordingCameraSize(_ size: RecordingCameraOverlaySize) -> String {
+        switch size {
+        case .small:
+            return string("recording.camera.size.small")
+        case .medium:
+            return string("recording.camera.size.medium")
+        case .large:
+            return string("recording.camera.size.large")
+        }
+    }
+
+    static func recordingCameraShape(_ shape: RecordingCameraOverlayShape) -> String {
+        switch shape {
+        case .circle:
+            return string("recording.camera.shape.circle")
+        case .roundedRectangle:
+            return string("recording.camera.shape.rounded_rectangle")
+        }
+    }
+
+    static func recordingCameraState(_ state: RecordingCameraState) -> String {
+        switch state {
+        case .disabled:
+            return string("recording.camera.state.disabled")
+        case .waiting:
+            return string("recording.camera.state.waiting")
+        case .capturing:
+            return string("recording.camera.state.capturing")
+        case .completed:
+            return string("recording.camera.state.completed")
+        case .failed:
+            return string("recording.camera.state.failed")
+        case .cancelled:
+            return string("recording.camera.state.cancelled")
+        }
+    }
+
     static func editKind(_ kind: ScreenshotEditKind) -> String {
         switch kind {
         case .arrow:

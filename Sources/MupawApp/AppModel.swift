@@ -57,8 +57,17 @@ final class AppModel {
     var recordingMicrophoneGain = 1.0
     var recordingSystemAudioMuted = false
     var recordingMicrophoneMuted = false
+    var recordingCameraEnabled = false
+    var recordingCameraVisible = true
+    var recordingCameraPosition: RecordingCameraOverlayPosition = .bottomRight
+    var recordingCameraSize: RecordingCameraOverlaySize = .medium
+    var recordingCameraShape: RecordingCameraOverlayShape = .circle
+    var recordingCameraCornerRadius = 0.12
+    var recordingCameraMargin = 0.025
     private(set) var microphoneDevices: [MicrophoneDeviceDescriptor] = []
     var selectedMicrophoneDeviceID: String?
+    private(set) var cameraDevices: [CameraDeviceDescriptor] = []
+    var selectedCameraDeviceID: String?
     private(set) var currentRecordingStatus: RecordingSessionStatus?
     private(set) var lastRecordingArtifact: RecordingArtifact?
     private(set) var lastArtifact: ScreenshotArtifact?
@@ -107,6 +116,7 @@ final class AppModel {
     private let projectService: ScreenshotProjectService
     private let permissionService = PermissionService()
     private let microphoneDeviceService: MicrophoneDeviceService
+    private let cameraDeviceService: CameraDeviceService
     private let regionSelectionController = RegionSelectionController()
     private var rpcServer: AgentRPCServer?
     private var hotKeyManager: GlobalHotKeyManager?
@@ -115,6 +125,7 @@ final class AppModel {
     private var hasStarted = false
     private var recordingStatusTask: Task<Void, Never>?
     private var recordingAudioControlTask: Task<Void, Never>?
+    private var recordingCameraControlTask: Task<Void, Never>?
 
     init() {
         do {
@@ -123,9 +134,12 @@ final class AppModel {
             self.captureService = CaptureService(paths: paths)
             let microphoneDeviceService = MicrophoneDeviceService()
             self.microphoneDeviceService = microphoneDeviceService
+            let cameraDeviceService = CameraDeviceService()
+            self.cameraDeviceService = cameraDeviceService
             self.recordingService = RecordingService(
                 paths: paths,
-                microphoneDeviceService: microphoneDeviceService
+                microphoneDeviceService: microphoneDeviceService,
+                cameraDeviceService: cameraDeviceService
             )
             self.projectService = ScreenshotProjectService(
                 paths: paths,
@@ -140,9 +154,12 @@ final class AppModel {
             self.captureService = CaptureService(paths: fallback)
             let microphoneDeviceService = MicrophoneDeviceService()
             self.microphoneDeviceService = microphoneDeviceService
+            let cameraDeviceService = CameraDeviceService()
+            self.cameraDeviceService = cameraDeviceService
             self.recordingService = RecordingService(
                 paths: fallback,
-                microphoneDeviceService: microphoneDeviceService
+                microphoneDeviceService: microphoneDeviceService,
+                cameraDeviceService: cameraDeviceService
             )
             self.projectService = ScreenshotProjectService(
                 paths: fallback,
@@ -160,6 +177,7 @@ final class AppModel {
         hasStarted = true
         refreshPermissions()
         refreshMicrophoneDevices(showErrors: false)
+        refreshCameraDevices(showErrors: false)
         startTrackingExternalApplications()
         startGlobalHotKeys()
 
@@ -190,6 +208,8 @@ final class AppModel {
         recordingStatusTask = nil
         recordingAudioControlTask?.cancel()
         recordingAudioControlTask = nil
+        recordingCameraControlTask?.cancel()
+        recordingCameraControlTask = nil
         recordingService.cancelActiveRecordingForShutdown()
         regionSelectionController.cancel()
         hotKeyManager?.stop()
@@ -221,6 +241,12 @@ final class AppModel {
         refreshMicrophoneDevices(showErrors: false)
     }
 
+    func requestCameraPermission() async {
+        _ = await permissionService.requestCameraAccess()
+        refreshPermissions()
+        refreshCameraDevices(showErrors: false)
+    }
+
     func refreshMicrophoneDevices(showErrors: Bool = true) {
         let result = microphoneDeviceService.listDevices()
         microphoneDevices = result.devices
@@ -242,6 +268,32 @@ final class AppModel {
         guard
             let url = URL(
                 string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            )
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func refreshCameraDevices(showErrors: Bool = true) {
+        let result = cameraDeviceService.listDevices()
+        cameraDevices = result.devices
+        if let selectedCameraDeviceID,
+            cameraDevices.contains(where: { $0.id == selectedCameraDeviceID })
+        {
+            return
+        }
+        selectedCameraDeviceID =
+            result.defaultDeviceID
+            ?? cameraDevices.first(where: { $0.isDefault })?.id
+            ?? cameraDevices.first?.id
+        if showErrors, recordingCameraEnabled, cameraDevices.isEmpty {
+            errorMessage = L10n.string("recording.error.no_camera_devices")
+        }
+    }
+
+    func openCameraPrivacySettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
             )
         else { return }
         NSWorkspace.shared.open(url)
@@ -512,6 +564,17 @@ final class AppModel {
                 return
             }
         }
+        if recordingCameraEnabled {
+            guard permissions.camera == .authorized else {
+                errorMessage = L10n.string("recording.error.camera_permission_required")
+                return
+            }
+            refreshCameraDevices(showErrors: false)
+            guard selectedCameraDeviceID != nil else {
+                errorMessage = L10n.string("recording.error.no_camera_devices")
+                return
+            }
+        }
 
         isBusy = true
         errorMessage = nil
@@ -557,6 +620,16 @@ final class AppModel {
                     microphoneGain: recordingMicrophoneGain,
                     systemAudioMuted: recordingSystemAudioMuted,
                     microphoneMuted: recordingMicrophoneMuted,
+                    cameraOverlay: RecordingCameraOverlayConfiguration(
+                        enabled: recordingCameraEnabled,
+                        deviceID: recordingCameraEnabled ? selectedCameraDeviceID : nil,
+                        visible: recordingCameraVisible,
+                        position: recordingCameraPosition,
+                        size: recordingCameraSize,
+                        shape: recordingCameraShape,
+                        cornerRadius: recordingCameraCornerRadius,
+                        margin: recordingCameraMargin
+                    ),
                     excludeMupawUI: selectedCaptureMode != .window
                 )
             )
@@ -640,6 +713,44 @@ final class AppModel {
                     microphoneGain: recordingMicrophoneGain,
                     systemAudioMuted: recordingSystemAudioMuted,
                     microphoneMuted: recordingMicrophoneMuted
+                )
+            )
+            applyRecordingStatus(status)
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    func scheduleRecordingCameraOverlayUpdate() {
+        guard hasActiveRecording, currentRecordingStatus?.camera.requested == true else { return }
+        recordingCameraControlTask?.cancel()
+        recordingCameraControlTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(80))
+            } catch {
+                return
+            }
+            await self?.updateRecordingCameraOverlay()
+        }
+    }
+
+    func updateRecordingCameraOverlay() async {
+        guard let sessionID = currentRecordingStatus?.id ?? recordingService.activeSessionID,
+            hasActiveRecording,
+            currentRecordingStatus?.camera.requested == true
+        else {
+            return
+        }
+        do {
+            let status = try recordingService.updateCameraOverlay(
+                RecordingCameraOverlayUpdateRequest(
+                    sessionID: sessionID,
+                    visible: recordingCameraVisible,
+                    position: recordingCameraPosition,
+                    size: recordingCameraSize,
+                    shape: recordingCameraShape,
+                    cornerRadius: recordingCameraCornerRadius,
+                    margin: recordingCameraMargin
                 )
             )
             applyRecordingStatus(status)
@@ -789,6 +900,16 @@ final class AppModel {
         recordingMicrophoneGain = status.audio.controls.microphoneGain
         recordingSystemAudioMuted = status.audio.controls.systemAudioMuted
         recordingMicrophoneMuted = status.audio.controls.microphoneMuted
+        if status.camera.requested {
+            recordingCameraEnabled = true
+            selectedCameraDeviceID = status.camera.deviceID ?? selectedCameraDeviceID
+            recordingCameraVisible = status.camera.visible ?? true
+            recordingCameraPosition = status.camera.position ?? recordingCameraPosition
+            recordingCameraSize = status.camera.size ?? recordingCameraSize
+            recordingCameraShape = status.camera.shape ?? recordingCameraShape
+            recordingCameraCornerRadius = status.camera.cornerRadius ?? recordingCameraCornerRadius
+            recordingCameraMargin = status.camera.margin ?? recordingCameraMargin
+        }
         if let artifact = status.artifact {
             lastRecordingArtifact = artifact
         }
@@ -799,6 +920,8 @@ final class AppModel {
             recordingStatusTask = nil
             recordingAudioControlTask?.cancel()
             recordingAudioControlTask = nil
+            recordingCameraControlTask?.cancel()
+            recordingCameraControlTask = nil
         }
     }
 
@@ -1143,6 +1266,12 @@ final class AppModel {
                 code: .invalidAudioControls,
                 message: error.localizedDescription
             )
+        case .invalidCameraOverlay:
+            return .failure(
+                id: requestID,
+                code: .invalidCameraOverlay,
+                message: error.localizedDescription
+            )
         case .microphonePermissionRequired:
             return .failure(
                 id: requestID,
@@ -1156,6 +1285,24 @@ final class AppModel {
                 message: error.localizedDescription
             )
         case .microphoneDisconnected:
+            return .failure(
+                id: requestID,
+                code: .recordingFailed,
+                message: error.localizedDescription
+            )
+        case .cameraPermissionRequired:
+            return .failure(
+                id: requestID,
+                code: .cameraPermissionRequired,
+                message: error.localizedDescription
+            )
+        case .cameraDeviceNotFound:
+            return .failure(
+                id: requestID,
+                code: .cameraDeviceNotFound,
+                message: error.localizedDescription
+            )
+        case .cameraDisconnected:
             return .failure(
                 id: requestID,
                 code: .recordingFailed,
@@ -1238,6 +1385,15 @@ final class AppModel {
                 }
                 return try .success(id: request.id, value: result)
 
+            case .camerasList:
+                refreshPermissions(forceRefresh: false)
+                let result = cameraDeviceService.listDevices()
+                cameraDevices = result.devices
+                if selectedCameraDeviceID == nil {
+                    selectedCameraDeviceID = result.defaultDeviceID ?? result.devices.first?.id
+                }
+                return try .success(id: request.id, value: result)
+
             case .screenshotCapture:
                 refreshPermissions(forceRefresh: false)
                 guard permissions.screenCapture == .authorized else {
@@ -1296,6 +1452,14 @@ final class AppModel {
                     RecordingAudioControlUpdateRequest.self
                 )
                 let status = try recordingService.updateAudioControls(updateRequest)
+                applyRecordingStatus(status)
+                return try .success(id: request.id, value: status)
+
+            case .recordingUpdateCameraOverlay:
+                let updateRequest = try request.parameters.decode(
+                    RecordingCameraOverlayUpdateRequest.self
+                )
+                let status = try recordingService.updateCameraOverlay(updateRequest)
                 applyRecordingStatus(status)
                 return try .success(id: request.id, value: status)
 

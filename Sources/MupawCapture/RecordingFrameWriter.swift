@@ -1,10 +1,12 @@
 @preconcurrency import AVFoundation
 import AudioToolbox
+import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
 import MupawCore
 @preconcurrency import ScreenCaptureKit
+import VideoToolbox
 
 enum RecordingFrameWriterError: Error, LocalizedError, Sendable {
     case couldNotCreateWriter(String)
@@ -17,6 +19,10 @@ enum RecordingFrameWriterError: Error, LocalizedError, Sendable {
     case noVideoFrames
     case noAudioSamples(RecordingAudioLane)
     case audioSourceStalled(RecordingAudioLane)
+    case invalidCameraFrame
+    case noCameraFrames
+    case cameraSourceStalled
+    case cameraCompositionFailed(String)
     case pendingSamplesExceeded(String)
     case finishFailed(String)
     case alreadyFinishing
@@ -43,6 +49,14 @@ enum RecordingFrameWriterError: Error, LocalizedError, Sendable {
             "The recording requested \(lane.rawValue) audio, but no valid samples arrived."
         case .audioSourceStalled(let lane):
             "The \(lane.rawValue) audio source stopped producing samples during recording."
+        case .invalidCameraFrame:
+            "The selected camera returned an invalid video frame."
+        case .noCameraFrames:
+            "The recording requested a camera overlay, but no valid camera frames arrived."
+        case .cameraSourceStalled:
+            "The camera stopped producing frames during recording."
+        case .cameraCompositionFailed(let message):
+            "The camera overlay could not be composed: \(message)"
         case .pendingSamplesExceeded(let track):
             "The \(track) track did not become ready before its pending-sample limit was reached."
         case .finishFailed(let message):
@@ -92,17 +106,30 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         var measurementCount = 0
     }
 
+    private struct CameraAccumulator {
+        var frameCount = 0
+        var lastFrameAt: Date?
+        var lastSourceTimestampSeconds: Double?
+        var sourcePixelWidth: Int?
+        var sourcePixelHeight: Int?
+    }
+
     let videoOutputQueue: DispatchQueue
     let audioOutputQueue: DispatchQueue
 
     private let sampleQueue: DispatchQueue
     private let outputURL: URL
+    private let pixelWidth: Int
+    private let pixelHeight: Int
     private let frameRate: Int
     private let audioSource: RecordingAudioSource
+    private let cameraCaptureRequested: Bool
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
+    private var videoAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var systemAudioInput: AVAssetWriterInput?
     private var microphoneInput: AVAssetWriterInput?
+    private let outputColorSpace = CGColorSpaceCreateDeviceRGB()
     private let stateLock = NSLock()
     private let onFailure: @Sendable (Error) -> Void
 
@@ -110,11 +137,15 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     private var firstVideoPresentationTime: CMTime?
     private var lastVideoPresentationTime: CMTime?
     private var lastVideoSampleBuffer: CMSampleBuffer?
+    private var lastCompositedVideoPixelBuffer: CVPixelBuffer?
+    private var latestScreenPixelBuffer: CVPixelBuffer?
+    private var latestCameraPixelBuffer: CVPixelBuffer?
     private var pendingVideoSamples: [CMSampleBuffer] = []
     private var pendingSystemAudioSamples: [CMSampleBuffer] = []
     private var pendingMicrophoneSamples: [CMSampleBuffer] = []
     private var systemAudioAccumulator = AudioLaneAccumulator()
     private var microphoneAccumulator = AudioLaneAccumulator()
+    private var cameraAccumulator = CameraAccumulator()
     private var wallClockStartedAt: Date?
     private var appendedFrameCount = 0
     private var terminalError: Error?
@@ -123,6 +154,8 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     private var didStartWriting = false
     private var currentControls: RecordingAudioControls
     private var controlEvents: [RecordingAudioControlEvent]
+    private var currentCameraOverlay: RecordingCameraOverlayConfiguration
+    private var cameraControlEvents: [RecordingCameraControlEvent]
 
     init(
         outputURL: URL,
@@ -132,15 +165,31 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         quality: RecordingVideoQuality,
         audioSource: RecordingAudioSource,
         audioControls: RecordingAudioControls,
+        cameraOverlay: RecordingCameraOverlayConfiguration,
         onFailure: @escaping @Sendable (Error) -> Void
     ) throws {
         self.outputURL = outputURL
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
         self.frameRate = frameRate
+        if cameraOverlay.enabled {
+            _ = try RecordingCameraLayoutPlanner.makeRect(
+                outputPixelWidth: pixelWidth,
+                outputPixelHeight: pixelHeight,
+                configuration: cameraOverlay
+            )
+        }
         self.audioSource = audioSource
+        self.cameraCaptureRequested = cameraOverlay.enabled
         self.currentControls = audioControls
         self.controlEvents = [
             RecordingAudioControlEvent(elapsedSeconds: 0, controls: audioControls)
         ]
+        self.currentCameraOverlay = cameraOverlay
+        self.cameraControlEvents =
+            cameraOverlay.enabled
+            ? [RecordingCameraControlEvent(elapsedSeconds: 0, configuration: cameraOverlay)]
+            : []
 
         let queueIdentifier = UUID().uuidString
         self.videoOutputQueue = DispatchQueue(
@@ -190,6 +239,17 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             throw RecordingFrameWriterError.couldNotAddVideoInput
         }
         writer.add(videoInput)
+        if cameraCaptureRequested {
+            self.videoAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+                assetWriterInput: videoInput,
+                sourcePixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferWidthKey as String: pixelWidth,
+                    kCVPixelBufferHeightKey as String: pixelHeight,
+                    kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                ]
+            )
+        }
 
         if audioSource.usesSystemAudio {
             self.systemAudioInput = try Self.makeAudioInput(
@@ -223,6 +283,32 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         )
     }
 
+    func updateCameraOverlay(
+        _ configuration: RecordingCameraOverlayConfiguration,
+        now: Date = Date()
+    ) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard cameraCaptureRequested,
+            configuration.enabled,
+            configuration.deviceID == currentCameraOverlay.deviceID,
+            configuration != currentCameraOverlay
+        else {
+            return
+        }
+        currentCameraOverlay = configuration
+        let elapsed = wallClockStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
+        if cameraControlEvents.count >= MupawConstants.maximumRecordingCameraControlEvents {
+            cameraControlEvents.removeFirst()
+        }
+        cameraControlEvents.append(
+            RecordingCameraControlEvent(
+                elapsedSeconds: elapsed,
+                configuration: configuration
+            )
+        )
+    }
+
     func stream(
         _ stream: SCStream,
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
@@ -232,6 +318,14 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         let box = SampleBufferBox(sampleBuffer)
         sampleQueue.async { [self, box] in
             processSampleBuffer(box.value, outputType: outputType)
+        }
+    }
+
+    func receiveCameraSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+        let box = SampleBufferBox(sampleBuffer)
+        sampleQueue.async { [self, box] in
+            receiveCamera(box.value)
         }
     }
 
@@ -269,7 +363,8 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             systemAudio: system,
             microphone: microphone,
             controls: currentControls,
-            controlEvents: controlEvents
+            controlEvents: controlEvents,
+            camera: cameraMetricsLocked()
         )
     }
 
@@ -301,6 +396,29 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         }
     }
 
+    func cameraHealthError(now: Date = Date()) -> RecordingFrameWriterError? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !isFinishing, terminalError == nil, let wallClockStartedAt else { return nil }
+        let failure = RecordingCameraHealthPolicy.evaluate(
+            startedAt: wallClockStartedAt,
+            now: now,
+            observation: RecordingCameraHealthObservation(
+                requested: cameraCaptureRequested,
+                frameCount: cameraAccumulator.frameCount,
+                lastFrameAt: cameraAccumulator.lastFrameAt
+            )
+        )
+        switch failure {
+        case .missing:
+            return .noCameraFrames
+        case .stalled:
+            return .cameraSourceStalled
+        case nil:
+            return nil
+        }
+    }
+
     func finish() async throws -> RecordingFrameMetrics {
         drainOutputQueues()
         return try await withCheckedThrowingContinuation { continuation in
@@ -319,9 +437,11 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                 let startTime = sessionStartTime
                 let lastVideoTime = lastVideoPresentationTime
                 let lastVideoSample = lastVideoSampleBuffer
+                let lastCompositedVideo = lastCompositedVideoPixelBuffer
                 let wallStart = wallClockStartedAt
                 let systemAppended = systemAudioAccumulator.appendedSampleBufferCount
                 let microphoneAppended = microphoneAccumulator.appendedSampleBufferCount
+                let cameraFrames = cameraAccumulator.frameCount
                 let lastSystemEnd = systemAudioAccumulator.lastEndTime
                 let lastMicrophoneEnd = microphoneAccumulator.lastEndTime
                 stateLock.unlock()
@@ -345,6 +465,11 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                     )
                     return
                 }
+                if cameraCaptureRequested, cameraFrames <= 0 {
+                    cancelWriterAndDelete()
+                    continuation.resume(throwing: RecordingFrameWriterError.noCameraFrames)
+                    return
+                }
                 guard frameCount > 0,
                     let startTime,
                     let lastVideoTime,
@@ -362,6 +487,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                         sessionStartTime: startTime,
                         lastVideoTime: lastVideoTime,
                         lastVideoSample: lastVideoSample,
+                        lastCompositedVideo: lastCompositedVideo,
                         wallDurationSeconds: wallDuration
                     )
                 } catch {
@@ -442,7 +568,12 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     }
 
     private func receiveVideo(_ sampleBuffer: CMSampleBuffer) {
-        guard sampleIsAcceptable(sampleBuffer) else { return }
+        guard sampleIsAcceptable(sampleBuffer),
+            let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+        else {
+            return
+        }
+        latestScreenPixelBuffer = imageBuffer
         stateLock.lock()
         let hasStarted = sessionStartTime != nil
         if !hasStarted {
@@ -456,7 +587,9 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         stateLock.unlock()
 
         if hasStarted {
-            appendVideo(sampleBuffer, requireReadiness: false)
+            if !cameraCaptureRequested {
+                appendVideo(sampleBuffer, requireReadiness: false)
+            }
         } else {
             startSessionAndFlushPendingIfReady()
         }
@@ -515,12 +648,50 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         }
     }
 
+    private func receiveCamera(_ sampleBuffer: CMSampleBuffer) {
+        guard cameraCaptureRequested,
+            sampleIsAcceptable(sampleBuffer),
+            let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+        else {
+            return
+        }
+        let width = CVPixelBufferGetWidth(imageBuffer)
+        let height = CVPixelBufferGetHeight(imageBuffer)
+        guard width > 0, height > 0 else {
+            reportFailure(RecordingFrameWriterError.invalidCameraFrame)
+            return
+        }
+
+        let now = Date()
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let timestamp = CMTimeGetSeconds(presentationTime)
+        latestCameraPixelBuffer = imageBuffer
+        stateLock.lock()
+        cameraAccumulator.frameCount += 1
+        cameraAccumulator.lastFrameAt = now
+        cameraAccumulator.lastSourceTimestampSeconds = timestamp.isFinite ? timestamp : nil
+        cameraAccumulator.sourcePixelWidth = width
+        cameraAccumulator.sourcePixelHeight = height
+        let hasStarted = sessionStartTime != nil
+        stateLock.unlock()
+
+        if hasStarted {
+            appendCameraDrivenVideoFrame(
+                camera: imageBuffer,
+                presentationTime: presentationTime
+            )
+        } else {
+            startSessionAndFlushPendingIfReady()
+        }
+    }
+
     private func startSessionAndFlushPendingIfReady() {
         stateLock.lock()
         guard sessionStartTime == nil,
             !pendingVideoSamples.isEmpty,
             !audioSource.usesSystemAudio || !pendingSystemAudioSamples.isEmpty,
             !audioSource.usesMicrophone || !pendingMicrophoneSamples.isEmpty,
+            !cameraCaptureRequested || cameraAccumulator.frameCount > 0,
             terminalError == nil,
             !isFinishing
         else {
@@ -575,13 +746,44 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     private func appendVideo(_ sampleBuffer: CMSampleBuffer, requireReadiness: Bool) {
         guard waitUntilReady(videoInput, required: requireReadiness) else { return }
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard videoInput.append(sampleBuffer) else {
-            reportFailure(
-                RecordingFrameWriterError.appendFailed(
-                    writer.error?.localizedDescription ?? "Unknown writer error."
+        var compositedPixelBuffer: CVPixelBuffer?
+        if cameraCaptureRequested {
+            guard let screenPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+                let cameraPixelBuffer = latestCameraPixelBuffer,
+                let adaptor = videoAdaptor
+            else {
+                reportFailure(RecordingFrameWriterError.invalidCameraFrame)
+                return
+            }
+            do {
+                let output = try makeCompositedVideoPixelBuffer(
+                    screen: screenPixelBuffer,
+                    camera: cameraPixelBuffer,
+                    configuration: cameraOverlaySnapshot()
                 )
-            )
-            return
+                guard adaptor.append(output, withPresentationTime: presentationTime) else {
+                    reportFailure(
+                        RecordingFrameWriterError.appendFailed(
+                            writer.error?.localizedDescription
+                                ?? "The composited video frame was rejected."
+                        )
+                    )
+                    return
+                }
+                compositedPixelBuffer = output
+            } catch {
+                reportFailure(error)
+                return
+            }
+        } else {
+            guard videoInput.append(sampleBuffer) else {
+                reportFailure(
+                    RecordingFrameWriterError.appendFailed(
+                        writer.error?.localizedDescription ?? "Unknown writer error."
+                    )
+                )
+                return
+            }
         }
 
         stateLock.lock()
@@ -591,7 +793,265 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         }
         lastVideoPresentationTime = presentationTime
         lastVideoSampleBuffer = sampleBuffer
+        if let compositedPixelBuffer {
+            lastCompositedVideoPixelBuffer = compositedPixelBuffer
+        }
         stateLock.unlock()
+    }
+
+    private func appendCameraDrivenVideoFrame(
+        camera: CVPixelBuffer,
+        presentationTime: CMTime
+    ) {
+        guard cameraCaptureRequested,
+            let screen = latestScreenPixelBuffer,
+            let adaptor = videoAdaptor
+        else {
+            return
+        }
+
+        stateLock.lock()
+        let startTime = sessionStartTime
+        let lastTime = lastVideoPresentationTime
+        stateLock.unlock()
+        guard let startTime,
+            CMTimeCompare(presentationTime, startTime) >= 0
+        else {
+            return
+        }
+        if let lastTime {
+            let nextAllowed = CMTimeAdd(
+                lastTime,
+                CMTime(value: 1, timescale: CMTimeScale(frameRate))
+            )
+            guard CMTimeCompare(presentationTime, nextAllowed) >= 0 else { return }
+        }
+        guard videoInput.isReadyForMoreMediaData else { return }
+
+        do {
+            let output = try makeCompositedVideoPixelBuffer(
+                screen: screen,
+                camera: camera,
+                configuration: cameraOverlaySnapshot()
+            )
+            guard adaptor.append(output, withPresentationTime: presentationTime) else {
+                reportFailure(
+                    RecordingFrameWriterError.appendFailed(
+                        writer.error?.localizedDescription
+                            ?? "The camera-driven video frame was rejected."
+                    )
+                )
+                return
+            }
+            stateLock.lock()
+            appendedFrameCount += 1
+            if firstVideoPresentationTime == nil {
+                firstVideoPresentationTime = presentationTime
+            }
+            lastVideoPresentationTime = presentationTime
+            lastCompositedVideoPixelBuffer = output
+            stateLock.unlock()
+        } catch {
+            reportFailure(error)
+        }
+    }
+
+    private func cameraOverlaySnapshot() -> RecordingCameraOverlayConfiguration {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentCameraOverlay
+    }
+
+    private func makeCompositedVideoPixelBuffer(
+        screen: CVPixelBuffer,
+        camera: CVPixelBuffer,
+        configuration: RecordingCameraOverlayConfiguration
+    ) throws -> CVPixelBuffer {
+        let output = try makeOutputPixelBuffer()
+        guard CVPixelBufferGetPixelFormatType(output) == kCVPixelFormatType_32BGRA else {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "The composited video buffer is not BGRA."
+            )
+        }
+
+        let screenImage = try makeCGImage(from: screen, label: "screen")
+        let cameraImage =
+            configuration.visible
+            ? try makeCGImage(from: camera, label: "camera")
+            : nil
+
+        let lockStatus = CVPixelBufferLockBaseAddress(output, [])
+        guard lockStatus == kCVReturnSuccess else {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "Could not lock the composited video buffer (CVReturn \(lockStatus))."
+            )
+        }
+        defer { CVPixelBufferUnlockBaseAddress(output, []) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(output) else {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "The composited video buffer has no writable base address."
+            )
+        }
+        let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        )
+        guard
+            let context = CGContext(
+                data: baseAddress,
+                width: pixelWidth,
+                height: pixelHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: CVPixelBufferGetBytesPerRow(output),
+                space: outputColorSpace,
+                bitmapInfo: bitmapInfo.rawValue
+            )
+        else {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "Could not create the CPU camera-composition context."
+            )
+        }
+
+        let outputBounds = CGRect(
+            x: 0,
+            y: 0,
+            width: CGFloat(pixelWidth),
+            height: CGFloat(pixelHeight)
+        )
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(outputBounds)
+        context.translateBy(x: 0, y: CGFloat(pixelHeight))
+        context.scaleBy(x: 1, y: -1)
+        drawAspectFill(screenImage, in: outputBounds, context: context)
+
+        guard configuration.visible, let cameraImage else {
+            context.flush()
+            return output
+        }
+        let overlay: CaptureRect
+        do {
+            overlay = try RecordingCameraLayoutPlanner.makeRect(
+                outputPixelWidth: pixelWidth,
+                outputPixelHeight: pixelHeight,
+                configuration: configuration
+            )
+        } catch {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "The camera overlay layout is invalid."
+            )
+        }
+        let cameraRect = CGRect(
+            x: overlay.x,
+            y: overlay.y,
+            width: overlay.width,
+            height: overlay.height
+        ).standardized
+        let radius =
+            configuration.shape == .circle
+            ? min(cameraRect.width, cameraRect.height) / 2
+            : min(cameraRect.width, cameraRect.height) * configuration.cornerRadius
+
+        context.saveGState()
+        if configuration.shape == .circle {
+            context.addEllipse(in: cameraRect)
+        } else {
+            context.addPath(
+                CGPath(
+                    roundedRect: cameraRect,
+                    cornerWidth: radius,
+                    cornerHeight: radius,
+                    transform: nil
+                )
+            )
+        }
+        context.clip()
+        drawAspectFill(cameraImage, in: cameraRect, context: context)
+        context.restoreGState()
+        context.flush()
+        return output
+    }
+
+    private func makeOutputPixelBuffer() throws -> CVPixelBuffer {
+        if let pool = videoAdaptor?.pixelBufferPool {
+            var buffer: CVPixelBuffer?
+            let status = CVPixelBufferPoolCreatePixelBuffer(
+                kCFAllocatorDefault,
+                pool,
+                &buffer
+            )
+            if status == kCVReturnSuccess, let buffer {
+                return buffer
+            }
+        }
+
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            pixelWidth,
+            pixelHeight,
+            kCVPixelFormatType_32BGRA,
+            [
+                kCVPixelBufferIOSurfacePropertiesKey: [:],
+                kCVPixelBufferCGImageCompatibilityKey: true,
+                kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            ] as CFDictionary,
+            &buffer
+        )
+        guard status == kCVReturnSuccess, let buffer else {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "Could not allocate a composited video pixel buffer (CVReturn \(status))."
+            )
+        }
+        return buffer
+    }
+
+    private func makeCGImage(
+        from pixelBuffer: CVPixelBuffer,
+        label: String
+    ) throws -> CGImage {
+        var image: CGImage?
+        let status = VTCreateCGImageFromCVPixelBuffer(
+            pixelBuffer,
+            options: nil,
+            imageOut: &image
+        )
+        guard status == noErr, let image else {
+            throw RecordingFrameWriterError.cameraCompositionFailed(
+                "Could not convert the \(label) frame to a CPU image (OSStatus \(status))."
+            )
+        }
+        return image
+    }
+
+    private func drawAspectFill(
+        _ image: CGImage,
+        in target: CGRect,
+        context: CGContext
+    ) {
+        let sourceWidth = CGFloat(image.width)
+        let sourceHeight = CGFloat(image.height)
+        guard sourceWidth > 0, sourceHeight > 0,
+            target.width > 0, target.height > 0
+        else {
+            return
+        }
+        let scale = max(target.width / sourceWidth, target.height / sourceHeight)
+        let drawSize = CGSize(
+            width: sourceWidth * scale,
+            height: sourceHeight * scale
+        )
+        let drawRect = CGRect(
+            x: target.midX - drawSize.width / 2,
+            y: target.midY - drawSize.height / 2,
+            width: drawSize.width,
+            height: drawSize.height
+        )
+
+        context.saveGState()
+        context.clip(to: target)
+        context.interpolationQuality = .high
+        context.draw(image, in: drawRect)
+        context.restoreGState()
     }
 
     private func appendAudio(
@@ -812,6 +1272,20 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         )
     }
 
+    private func cameraMetricsLocked() -> RecordingCameraMetrics {
+        guard cameraCaptureRequested else { return .disabled }
+        return RecordingCameraMetrics(
+            requested: true,
+            configuration: currentCameraOverlay,
+            controlEvents: cameraControlEvents,
+            frameCount: cameraAccumulator.frameCount,
+            lastFrameAt: cameraAccumulator.lastFrameAt,
+            lastSourceTimestampSeconds: cameraAccumulator.lastSourceTimestampSeconds,
+            sourcePixelWidth: cameraAccumulator.sourcePixelWidth,
+            sourcePixelHeight: cameraAccumulator.sourcePixelHeight
+        )
+    }
+
     private func laneAccumulator(_ lane: RecordingAudioLane) -> AudioLaneAccumulator {
         lane == .systemAudio ? systemAudioAccumulator : microphoneAccumulator
     }
@@ -841,6 +1315,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         sessionStartTime: CMTime,
         lastVideoTime: CMTime,
         lastVideoSample: CMSampleBuffer,
+        lastCompositedVideo: CVPixelBuffer?,
         wallDurationSeconds: Double
     ) throws -> CMTime {
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
@@ -862,6 +1337,26 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             throw RecordingFrameWriterError.appendFailed(
                 "The writer was not ready for the final held frame."
             )
+        }
+
+        if cameraCaptureRequested {
+            guard let adaptor = videoAdaptor, let lastCompositedVideo else {
+                throw RecordingFrameWriterError.cameraCompositionFailed(
+                    "The final composited frame is unavailable."
+                )
+            }
+            guard adaptor.append(lastCompositedVideo, withPresentationTime: desiredTime) else {
+                throw RecordingFrameWriterError.appendFailed(
+                    writer.error?.localizedDescription
+                        ?? "The final held composited frame was rejected."
+                )
+            }
+            stateLock.lock()
+            appendedFrameCount += 1
+            lastVideoPresentationTime = desiredTime
+            lastCompositedVideoPixelBuffer = lastCompositedVideo
+            stateLock.unlock()
+            return desiredTime
         }
 
         var timing = CMSampleTimingInfo(

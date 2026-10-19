@@ -99,6 +99,7 @@ struct RecordingFrameMetrics: Sendable, Equatable {
     let microphone: RecordingAudioLaneMetrics
     let controls: RecordingAudioControls
     let controlEvents: [RecordingAudioControlEvent]
+    let camera: RecordingCameraMetrics
 }
 
 struct RecordingAudioLevelMeasurement: Sendable, Equatable {

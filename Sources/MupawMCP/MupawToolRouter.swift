@@ -39,6 +39,14 @@ internal struct MupawToolRouter: Sendable {
                 )
                 return success(result)
 
+            case "mupaw_cameras_list":
+                let result: CameraDeviceListResult = try await call(
+                    method: .camerasList,
+                    payload: EmptyPayload(),
+                    responseType: CameraDeviceListResult.self
+                )
+                return success(result)
+
             case "mupaw_screenshot_capture":
                 return try await screenshot(arguments: arguments)
 
@@ -50,6 +58,9 @@ internal struct MupawToolRouter: Sendable {
 
             case "mupaw_recording_update_audio_controls":
                 return try await recordingUpdateAudioControls(arguments: arguments)
+
+            case "mupaw_recording_update_camera_overlay":
+                return try await recordingUpdateCameraOverlay(arguments: arguments)
 
             case "mupaw_recording_stop":
                 return try await recordingStop(arguments: arguments)
@@ -195,7 +206,7 @@ internal struct MupawToolRouter: Sendable {
         let arguments = arguments ?? [:]
         let formatValue = arguments["format"]?.stringValue ?? RecordingFormat.mp4.rawValue
         guard let format = RecordingFormat(rawValue: formatValue), format == .mp4 else {
-            return failure("M2b supports H.264 MP4 recording with one optional AAC audio source.")
+            return failure("M3a supports H.264 MP4 recording with optional AAC audio and camera overlay.")
         }
 
         guard let modeValue = arguments["mode"]?.stringValue,
@@ -281,6 +292,7 @@ internal struct MupawToolRouter: Sendable {
         let microphoneGain = try audioGain(arguments["microphone_gain"], defaultValue: 1)
         let systemAudioMuted = arguments["system_audio_muted"]?.boolValue ?? false
         let microphoneMuted = arguments["microphone_muted"]?.boolValue ?? false
+        let cameraOverlay = try parseCameraOverlay(arguments["camera_overlay"])
 
         let request = RecordingRequest(
             mode: mode,
@@ -298,6 +310,7 @@ internal struct MupawToolRouter: Sendable {
             microphoneGain: microphoneGain,
             systemAudioMuted: systemAudioMuted,
             microphoneMuted: microphoneMuted,
+            cameraOverlay: cameraOverlay,
             excludeMupawUI: arguments["exclude_mupaw_ui"]?.boolValue ?? true,
             fileName: arguments["file_name"]?.stringValue
         )
@@ -348,6 +361,92 @@ internal struct MupawToolRouter: Sendable {
         }
         let status: RecordingSessionStatus = try await call(
             method: .recordingUpdateAudioControls,
+            payload: request,
+            responseType: RecordingSessionStatus.self
+        )
+        return recordingResult(status)
+    }
+
+    private func recordingUpdateCameraOverlay(
+        arguments: [String: Value]?
+    ) async throws -> CallTool.Result {
+        let arguments = arguments ?? [:]
+        guard
+            let sessionID = arguments["session_id"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !sessionID.isEmpty
+        else {
+            throw ToolArgumentError(
+                message: "Mupaw request failed [invalid_request]: session_id is required."
+            )
+        }
+
+        let position: RecordingCameraOverlayPosition?
+        if let value = arguments["position"]?.stringValue {
+            guard let parsed = RecordingCameraOverlayPosition(rawValue: value) else {
+                throw ToolArgumentError(
+                    message:
+                        "Mupaw request failed [invalid_camera_overlay]: position must be top_left, top_right, bottom_left, or bottom_right."
+                )
+            }
+            position = parsed
+        } else {
+            position = nil
+        }
+
+        let size: RecordingCameraOverlaySize?
+        if let value = arguments["size"]?.stringValue {
+            guard let parsed = RecordingCameraOverlaySize(rawValue: value) else {
+                throw ToolArgumentError(
+                    message:
+                        "Mupaw request failed [invalid_camera_overlay]: size must be small, medium, or large."
+                )
+            }
+            size = parsed
+        } else {
+            size = nil
+        }
+
+        let shape: RecordingCameraOverlayShape?
+        if let value = arguments["shape"]?.stringValue {
+            guard let parsed = RecordingCameraOverlayShape(rawValue: value) else {
+                throw ToolArgumentError(
+                    message:
+                        "Mupaw request failed [invalid_camera_overlay]: shape must be circle or rounded_rectangle."
+                )
+            }
+            shape = parsed
+        } else {
+            shape = nil
+        }
+
+        let request = RecordingCameraOverlayUpdateRequest(
+            sessionID: sessionID,
+            visible: arguments["visible"]?.boolValue,
+            position: position,
+            size: size,
+            shape: shape,
+            cornerRadius: try optionalCameraOverlayNumber(
+                arguments["corner_radius"],
+                minimum: MupawConstants.minimumRecordingCameraCornerRadius,
+                maximum: MupawConstants.maximumRecordingCameraCornerRadius,
+                field: "corner_radius"
+            ),
+            margin: try optionalCameraOverlayNumber(
+                arguments["margin"],
+                minimum: MupawConstants.minimumRecordingCameraMargin,
+                maximum: MupawConstants.maximumRecordingCameraMargin,
+                field: "margin"
+            )
+        )
+        guard request.hasChanges else {
+            throw ToolArgumentError(
+                message:
+                    "Mupaw request failed [invalid_camera_overlay]: Provide at least one camera overlay field."
+            )
+        }
+        let status: RecordingSessionStatus = try await call(
+            method: .recordingUpdateCameraOverlay,
             payload: request,
             responseType: RecordingSessionStatus.self
         )
@@ -546,6 +645,111 @@ internal struct MupawToolRouter: Sendable {
     private func optionalAudioGain(_ value: Value?) throws -> Double? {
         guard value != nil else { return nil }
         return try audioGain(value, defaultValue: 1)
+    }
+
+    private func parseCameraOverlay(
+        _ value: Value?
+    ) throws -> RecordingCameraOverlayConfiguration {
+        guard let value else { return .disabled }
+        guard let object = value.objectValue else {
+            throw ToolArgumentError(
+                message: "camera_overlay must be an object."
+            )
+        }
+        let enabled = object["enabled"]?.boolValue ?? false
+        let visible = object["visible"]?.boolValue ?? enabled
+        let deviceID = object["camera_device_id"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !enabled, deviceID?.isEmpty == false || visible {
+            throw ToolArgumentError(
+                message:
+                    "Mupaw request failed [invalid_camera_overlay]: camera_device_id or visible=true requires camera_overlay.enabled=true."
+            )
+        }
+
+        let positionValue =
+            object["position"]?.stringValue
+            ?? RecordingCameraOverlayPosition.bottomRight.rawValue
+        guard let position = RecordingCameraOverlayPosition(rawValue: positionValue) else {
+            throw ToolArgumentError(
+                message:
+                    "camera_overlay.position must be top_left, top_right, bottom_left, or bottom_right."
+            )
+        }
+        let sizeValue =
+            object["size"]?.stringValue
+            ?? RecordingCameraOverlaySize.medium.rawValue
+        guard let size = RecordingCameraOverlaySize(rawValue: sizeValue) else {
+            throw ToolArgumentError(
+                message: "camera_overlay.size must be small, medium, or large."
+            )
+        }
+        let shapeValue =
+            object["shape"]?.stringValue
+            ?? RecordingCameraOverlayShape.circle.rawValue
+        guard let shape = RecordingCameraOverlayShape(rawValue: shapeValue) else {
+            throw ToolArgumentError(
+                message: "camera_overlay.shape must be circle or rounded_rectangle."
+            )
+        }
+        let cornerRadius = try cameraOverlayNumber(
+            object["corner_radius"],
+            defaultValue: 0.12,
+            minimum: MupawConstants.minimumRecordingCameraCornerRadius,
+            maximum: MupawConstants.maximumRecordingCameraCornerRadius,
+            field: "corner_radius"
+        )
+        let margin = try cameraOverlayNumber(
+            object["margin"],
+            defaultValue: 0.025,
+            minimum: MupawConstants.minimumRecordingCameraMargin,
+            maximum: MupawConstants.maximumRecordingCameraMargin,
+            field: "margin"
+        )
+        return RecordingCameraOverlayConfiguration(
+            enabled: enabled,
+            deviceID: enabled ? deviceID : nil,
+            visible: visible,
+            position: position,
+            size: size,
+            shape: shape,
+            cornerRadius: cornerRadius,
+            margin: margin
+        )
+    }
+
+    private func cameraOverlayNumber(
+        _ value: Value?,
+        defaultValue: Double,
+        minimum: Double,
+        maximum: Double,
+        field: String
+    ) throws -> Double {
+        guard let value else { return defaultValue }
+        guard let number = number(value), number.isFinite, (minimum...maximum).contains(number)
+        else {
+            throw ToolArgumentError(
+                message:
+                    "Mupaw request failed [invalid_camera_overlay]: \(field) must be a finite number from \(minimum) through \(maximum)."
+            )
+        }
+        return number
+    }
+
+    private func optionalCameraOverlayNumber(
+        _ value: Value?,
+        minimum: Double,
+        maximum: Double,
+        field: String
+    ) throws -> Double? {
+        guard value != nil else { return nil }
+        return try cameraOverlayNumber(
+            value,
+            defaultValue: minimum,
+            minimum: minimum,
+            maximum: maximum,
+            field: field
+        )
     }
 
     private func call<Payload: Encodable & Sendable, Result: Decodable & Sendable>(

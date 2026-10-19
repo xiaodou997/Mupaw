@@ -37,6 +37,16 @@ public enum MupawConstants {
     public static let maximumRecordingAudioControlEvents = 4_096
     public static let maximumRecordingAudioVideoDurationDifferenceSeconds = 0.25
     public static let maximumPendingRecordingSamplesPerTrack = 240
+    public static let recordingCameraLevelStaleSeconds = 0.75
+    public static let recordingCameraStartupTimeoutSeconds = 4.0
+    public static let recordingCameraSourceStallSeconds = 3.0
+    public static let recordingCameraCaptureWidth = 1_280
+    public static let recordingCameraCaptureHeight = 720
+    public static let minimumRecordingCameraCornerRadius = 0.0
+    public static let maximumRecordingCameraCornerRadius = 0.5
+    public static let minimumRecordingCameraMargin = 0.0
+    public static let maximumRecordingCameraMargin = 0.15
+    public static let maximumRecordingCameraControlEvents = 4_096
     public static let screenshotProjectSchemaVersion = 1
     public static let maximumProjectObjects = 500
     public static let maximumProjectCommandsPerBatch = 1_000
