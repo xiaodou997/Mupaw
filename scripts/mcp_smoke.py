@@ -22,6 +22,7 @@ EXPECTED_TOOLS = {
     "mupaw_app_status",
     "mupaw_capabilities_get",
     "mupaw_sources_list",
+    "mupaw_microphones_list",
     "mupaw_screenshot_capture",
     "mupaw_recording_start",
     "mupaw_recording_status",
@@ -531,6 +532,34 @@ def run(
                 "mupaw_screenshot_capture schema omitted M1a mode/region properties"
             )
         tool_schema_check = {"m1aCaptureProperties": sorted(required_schema_properties)}
+        recording_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict)
+                and item.get("name") == "mupaw_recording_start"
+            ),
+            None,
+        )
+        recording_schema = (
+            recording_tool.get("inputSchema") if isinstance(recording_tool, dict) else None
+        )
+        recording_properties = (
+            recording_schema.get("properties")
+            if isinstance(recording_schema, dict)
+            else None
+        )
+        required_recording_properties = {
+            "audio_source",
+            "include_system_audio",
+            "include_microphone",
+            "microphone_device_id",
+        }
+        if not isinstance(recording_properties, dict) or not required_recording_properties.issubset(
+            recording_properties
+        ):
+            raise SmokeFailure("mupaw_recording_start schema omitted M2b audio properties")
+        tool_schema_check["m2bRecordingProperties"] = sorted(required_recording_properties)
         apply_tool = next(
             (
                 item

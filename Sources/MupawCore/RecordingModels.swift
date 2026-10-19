@@ -12,6 +12,14 @@ public enum RecordingAudioCodec: String, Codable, Sendable, CaseIterable, Hashab
     case aac
 }
 
+public enum RecordingAudioSource: String, Codable, Sendable, CaseIterable, Hashable {
+    case none
+    case systemAudio = "system_audio"
+    case microphone
+
+    public var isEnabled: Bool { self != .none }
+}
+
 public enum RecordingAudioState: String, Codable, Sendable, CaseIterable, Hashable {
     case disabled
     case waiting
@@ -23,6 +31,7 @@ public enum RecordingAudioState: String, Codable, Sendable, CaseIterable, Hashab
 
 public struct RecordingAudioInfo: Codable, Sendable, Equatable {
     public let requested: Bool
+    public let source: RecordingAudioSource
     public let state: RecordingAudioState
     public let codec: RecordingAudioCodec?
     public let trackCount: Int
@@ -31,9 +40,12 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
     public let durationSeconds: Double?
     public let sampleBufferCount: Int
     public let audioVideoDurationDifferenceSeconds: Double?
+    public let deviceID: String?
+    public let deviceName: String?
 
     public init(
         requested: Bool,
+        source: RecordingAudioSource? = nil,
         state: RecordingAudioState,
         codec: RecordingAudioCodec? = nil,
         trackCount: Int = 0,
@@ -41,9 +53,12 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
         channelCount: Int? = nil,
         durationSeconds: Double? = nil,
         sampleBufferCount: Int = 0,
-        audioVideoDurationDifferenceSeconds: Double? = nil
+        audioVideoDurationDifferenceSeconds: Double? = nil,
+        deviceID: String? = nil,
+        deviceName: String? = nil
     ) {
         self.requested = requested
+        self.source = source ?? (requested ? .systemAudio : .none)
         self.state = state
         self.codec = codec
         self.trackCount = trackCount
@@ -52,9 +67,52 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
         self.durationSeconds = durationSeconds
         self.sampleBufferCount = sampleBufferCount
         self.audioVideoDurationDifferenceSeconds = audioVideoDurationDifferenceSeconds
+        self.deviceID = deviceID
+        self.deviceName = deviceName
     }
 
-    public static let disabled = RecordingAudioInfo(requested: false, state: .disabled)
+    private enum CodingKeys: String, CodingKey {
+        case requested
+        case source
+        case state
+        case codec
+        case trackCount
+        case sampleRate
+        case channelCount
+        case durationSeconds
+        case sampleBufferCount
+        case audioVideoDurationDifferenceSeconds
+        case deviceID
+        case deviceName
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requested = try container.decodeIfPresent(Bool.self, forKey: .requested) ?? false
+        source =
+            try container.decodeIfPresent(RecordingAudioSource.self, forKey: .source)
+            ?? (requested ? .systemAudio : .none)
+        state = try container.decode(RecordingAudioState.self, forKey: .state)
+        codec = try container.decodeIfPresent(RecordingAudioCodec.self, forKey: .codec)
+        trackCount = try container.decodeIfPresent(Int.self, forKey: .trackCount) ?? 0
+        sampleRate = try container.decodeIfPresent(Int.self, forKey: .sampleRate)
+        channelCount = try container.decodeIfPresent(Int.self, forKey: .channelCount)
+        durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
+        sampleBufferCount = try container.decodeIfPresent(Int.self, forKey: .sampleBufferCount) ?? 0
+        audioVideoDurationDifferenceSeconds =
+            try container.decodeIfPresent(
+                Double.self,
+                forKey: .audioVideoDurationDifferenceSeconds
+            )
+        deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
+        deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
+    }
+
+    public static let disabled = RecordingAudioInfo(
+        requested: false,
+        source: .none,
+        state: .disabled
+    )
 }
 
 public enum RecordingVideoQuality: String, Codable, Sendable, CaseIterable, Hashable {
@@ -106,9 +164,24 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
     public let frameRate: Int
     public let quality: RecordingVideoQuality
     public let includeCursor: Bool
+    public let audioSource: RecordingAudioSource
     public let includeSystemAudio: Bool
+    public let includeMicrophone: Bool
+    public let microphoneDeviceID: String?
     public let excludeMupawUI: Bool
     public let fileName: String?
+
+    public var hasConflictingAudioSelection: Bool {
+        if includeSystemAudio && includeMicrophone { return true }
+        switch audioSource {
+        case .none:
+            return includeSystemAudio || includeMicrophone
+        case .systemAudio:
+            return includeMicrophone
+        case .microphone:
+            return includeSystemAudio
+        }
+    }
 
     public init(
         mode: ScreenshotCaptureMode,
@@ -118,10 +191,24 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         frameRate: Int = 30,
         quality: RecordingVideoQuality = .standard,
         includeCursor: Bool = false,
+        audioSource: RecordingAudioSource? = nil,
         includeSystemAudio: Bool = false,
+        includeMicrophone: Bool = false,
+        microphoneDeviceID: String? = nil,
         excludeMupawUI: Bool = true,
         fileName: String? = nil
     ) {
+        let resolvedAudioSource: RecordingAudioSource
+        if let audioSource {
+            resolvedAudioSource = audioSource
+        } else if includeSystemAudio && !includeMicrophone {
+            resolvedAudioSource = .systemAudio
+        } else if includeMicrophone && !includeSystemAudio {
+            resolvedAudioSource = .microphone
+        } else {
+            resolvedAudioSource = .none
+        }
+
         self.mode = mode
         self.sourceID = sourceID
         self.region = region
@@ -129,7 +216,10 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         self.frameRate = frameRate
         self.quality = quality
         self.includeCursor = includeCursor
-        self.includeSystemAudio = includeSystemAudio
+        self.audioSource = resolvedAudioSource
+        self.includeSystemAudio = includeSystemAudio || resolvedAudioSource == .systemAudio
+        self.includeMicrophone = includeMicrophone || resolvedAudioSource == .microphone
+        self.microphoneDeviceID = microphoneDeviceID
         self.excludeMupawUI = excludeMupawUI
         self.fileName = fileName
     }
@@ -142,7 +232,10 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         case frameRate
         case quality
         case includeCursor
+        case audioSource
         case includeSystemAudio
+        case includeMicrophone
+        case microphoneDeviceID
         case excludeMupawUI
         case fileName
     }
@@ -157,10 +250,68 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         quality =
             try container.decodeIfPresent(RecordingVideoQuality.self, forKey: .quality) ?? .standard
         includeCursor = try container.decodeIfPresent(Bool.self, forKey: .includeCursor) ?? false
-        includeSystemAudio =
+
+        let explicitAudioSource =
+            try container.decodeIfPresent(RecordingAudioSource.self, forKey: .audioSource)
+        let legacySystemAudio =
             try container.decodeIfPresent(Bool.self, forKey: .includeSystemAudio) ?? false
+        let legacyMicrophone =
+            try container.decodeIfPresent(Bool.self, forKey: .includeMicrophone) ?? false
+        if let explicitAudioSource {
+            audioSource = explicitAudioSource
+        } else if legacySystemAudio && !legacyMicrophone {
+            audioSource = .systemAudio
+        } else if legacyMicrophone && !legacySystemAudio {
+            audioSource = .microphone
+        } else {
+            audioSource = .none
+        }
+        includeSystemAudio = legacySystemAudio || audioSource == .systemAudio
+        includeMicrophone = legacyMicrophone || audioSource == .microphone
+        microphoneDeviceID = try container.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
         excludeMupawUI = try container.decodeIfPresent(Bool.self, forKey: .excludeMupawUI) ?? true
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+    }
+}
+
+public struct MicrophoneDeviceDescriptor: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    public let manufacturer: String?
+    public let isDefault: Bool
+    public let isConnected: Bool
+
+    public init(
+        id: String,
+        name: String,
+        manufacturer: String? = nil,
+        isDefault: Bool,
+        isConnected: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.manufacturer = manufacturer
+        self.isDefault = isDefault
+        self.isConnected = isConnected
+    }
+}
+
+public struct MicrophoneDeviceListResult: Codable, Sendable, Equatable {
+    public let refreshedAt: Date
+    public let permission: PermissionStatus
+    public let defaultDeviceID: String?
+    public let devices: [MicrophoneDeviceDescriptor]
+
+    public init(
+        refreshedAt: Date = Date(),
+        permission: PermissionStatus,
+        defaultDeviceID: String?,
+        devices: [MicrophoneDeviceDescriptor]
+    ) {
+        self.refreshedAt = refreshedAt
+        self.permission = permission
+        self.defaultDeviceID = defaultDeviceID
+        self.devices = devices
     }
 }
 

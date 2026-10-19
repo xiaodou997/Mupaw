@@ -54,14 +54,15 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 
 ## Recording rules
 
-- M1e video-only behavior remains the compatibility baseline. M2a may add one optional ScreenCaptureKit system-audio track only when `includeSystemAudio` is true; the default remains false.
-- M2a system audio is 48 kHz stereo AAC in the same MP4. Do not add microphone input, mixing, camera, GIF, click/keystroke overlays, or zoom behavior to this contract.
-- `Mupaw.app` owns one recording service and one active recording session. Screenshot capture/selection and recording start/finalization are mutually exclusive.
+- M1e video-only behavior remains the compatibility baseline. M2a added optional system audio; M2b adds one independently selected microphone. A missing audio selection must continue to mean no audio.
+- The canonical audio source is `none`, `system_audio`, or `microphone`. Legacy system/microphone booleans may decode for compatibility, but contradictory or simultaneous selections must be rejected before a file is created.
+- M2b records exactly one optional AAC source. Do not add system-audio/microphone mixing, camera, GIF, click/keystroke overlays, or zoom behavior to this contract.
+- `Mupaw.app` owns microphone permission, device discovery, one recording service, and one active recording session. Agents consume structured device IDs and never drive the UI.
 - Human region recording uses the native AppKit selector. Agent region recording accepts a structured `global_display_points` rectangle and must never operate the UI.
-- Video and audio share one AVAssetWriter timeline. Buffer the first samples as needed, preserve valid source timestamps, and keep audio/video duration difference within the bounded acceptance threshold.
-- If system audio is requested, missing, invalid, or unwritable audio must fail the session; never silently downgrade to a video-only artifact. With audio disabled, the MP4 must contain zero audio tracks.
-- A successful start returns a stable session UUID; callers poll status and stop/cancel explicitly. Do not claim a completed artifact before AVAssetWriter finalization, AVFoundation video/audio track validation, file permissions, byte count, SHA-256, and preview all succeed.
-- Cancelled, failed, interrupted, or source-lost sessions must remove incomplete files and return terminal state without an artifact.
+- Video and the selected audio source share one AVAssetWriter timeline. Buffer the first samples as needed, preserve valid timestamps, and keep audio/video duration difference within the bounded acceptance threshold.
+- Requested system audio or microphone audio that is missing, invalid, disconnected, or unwritable must fail the session and delete partial output; never silently downgrade to video-only or another device.
+- A successful start returns a stable session UUID; callers poll status and stop/cancel explicitly. Do not claim a completed artifact before AVAssetWriter finalization, AVFoundation track validation, file permissions, byte count, SHA-256, and preview all succeed.
+- Cancelled, failed, interrupted, source-lost, or microphone-disconnected sessions must remove incomplete files and return terminal state without an artifact.
 - Recording dimensions, frame rates, video/audio bit rates, duration, history, filenames, pending sample queues, and allocation sizes must be bounded. Recordings and files are owner-only.
 - Static sources still require wall-clock-correct MP4 duration; hold the last video frame when ScreenCaptureKit does not deliver repeated unchanged frames.
 

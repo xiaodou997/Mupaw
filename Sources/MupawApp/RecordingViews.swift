@@ -19,12 +19,20 @@ struct RecordingSidebarGroup: View {
                 Toggle(L10n.string("toggle.include_cursor"), isOn: $model.includeCursor)
                     .disabled(model.hasActiveRecording)
 
-                Toggle(
-                    L10n.string("recording.system_audio"),
-                    isOn: $model.recordingSystemAudio
-                )
+                Picker(
+                    L10n.string("recording.audio_source"),
+                    selection: $model.recordingAudioSource
+                ) {
+                    ForEach(RecordingAudioSource.allCases, id: \.self) { source in
+                        Text(L10n.recordingAudioSource(source)).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
                 .disabled(model.hasActiveRecording)
-                .help(L10n.string("recording.system_audio.description"))
+
+                if model.recordingAudioSource == .microphone {
+                    microphoneControls
+                }
 
                 HStack {
                     Picker(L10n.string("recording.frame_rate"), selection: $model.recordingFrameRate) {
@@ -89,7 +97,63 @@ struct RecordingSidebarGroup: View {
                 || model.hasActiveRecording
                 || model.permissions.screenCapture != .authorized
                 || (model.selectedCaptureMode != .region && model.selectedSourceID == nil)
+                || (model.recordingAudioSource == .microphone
+                    && (model.permissions.microphone != .authorized
+                        || model.selectedMicrophoneDeviceID == nil))
         )
+    }
+
+    @ViewBuilder
+    private var microphoneControls: some View {
+        if model.permissions.microphone == .authorized {
+            Picker(
+                L10n.string("recording.microphone.device"),
+                selection: $model.selectedMicrophoneDeviceID
+            ) {
+                ForEach(model.microphoneDevices) { device in
+                    Text(
+                        device.isDefault
+                            ? L10n.format("recording.microphone.default.format", device.name)
+                            : device.name
+                    )
+                    .tag(Optional(device.id))
+                }
+            }
+            .disabled(model.hasActiveRecording || model.microphoneDevices.isEmpty)
+
+            HStack {
+                Text(
+                    model.microphoneDevices.isEmpty
+                        ? L10n.string("recording.microphone.none")
+                        : L10n.string("recording.microphone.description")
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Button(L10n.string("recording.microphone.refresh")) {
+                    model.refreshMicrophoneDevices()
+                }
+                .disabled(model.hasActiveRecording)
+            }
+        } else {
+            Text(
+                L10n.format(
+                    "recording.microphone.permission_status.format",
+                    L10n.permissionStatus(model.permissions.microphone)
+                )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            HStack {
+                Button(L10n.string("recording.microphone.request_permission")) {
+                    Task { await model.requestMicrophonePermission() }
+                }
+                Button(L10n.string("recording.microphone.open_settings")) {
+                    model.openMicrophonePrivacySettings()
+                }
+            }
+            .disabled(model.hasActiveRecording)
+        }
     }
 
     private func activeControls(_ status: RecordingSessionStatus) -> some View {
@@ -116,7 +180,7 @@ struct RecordingSidebarGroup: View {
             HStack {
                 Label(
                     L10n.recordingAudioState(status.audio.state),
-                    systemImage: status.audio.requested ? "speaker.wave.2.fill" : "speaker.slash.fill"
+                    systemImage: audioIcon(status.audio.source)
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -139,6 +203,17 @@ struct RecordingSidebarGroup: View {
         }
         .padding(10)
         .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func audioIcon(_ source: RecordingAudioSource) -> String {
+        switch source {
+        case .none:
+            return "speaker.slash.fill"
+        case .systemAudio:
+            return "speaker.wave.2.fill"
+        case .microphone:
+            return "mic.fill"
+        }
     }
 
     private func sourceRow(_ source: CaptureSourceDescriptor) -> some View {
@@ -209,8 +284,7 @@ struct RecordingDetailView: View {
                 Label(L10n.recordingQuality(status.quality), systemImage: "dial.medium")
                 Label(
                     L10n.recordingAudioState(status.audio.state),
-                    systemImage: status.audio.requested
-                        ? "speaker.wave.2.fill" : "speaker.slash.fill"
+                    systemImage: audioIcon(status.audio.source)
                 )
             }
             .font(.callout)
@@ -260,10 +334,20 @@ struct RecordingDetailView: View {
                 )
                 metadataRow(L10n.string("recording.metadata.codec"), "H.264 · MP4")
                 metadataRow(
-                    L10n.string("recording.metadata.system_audio"),
+                    L10n.string("recording.metadata.audio_source"),
+                    L10n.recordingAudioSource(artifact.audio.source)
+                )
+                metadataRow(
+                    L10n.string("recording.metadata.audio_state"),
                     L10n.recordingAudioState(artifact.audio.state)
                 )
                 if artifact.audio.requested {
+                    if let deviceName = artifact.audio.deviceName {
+                        metadataRow(
+                            L10n.string("recording.metadata.audio_device"),
+                            deviceName
+                        )
+                    }
                     metadataRow(
                         L10n.string("recording.metadata.audio_codec"),
                         L10n.string("recording.audio.codec.aac")
@@ -315,6 +399,17 @@ struct RecordingDetailView: View {
             description: Text(L10n.string("recording.empty.description"))
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func audioIcon(_ source: RecordingAudioSource) -> String {
+        switch source {
+        case .none:
+            return "speaker.slash.fill"
+        case .systemAudio:
+            return "speaker.wave.2.fill"
+        case .microphone:
+            return "mic.fill"
+        }
     }
 
     private func metadataRow(_ label: String, _ value: String) -> some View {

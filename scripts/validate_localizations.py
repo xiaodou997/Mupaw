@@ -33,6 +33,11 @@ REQUIRED_LOCALIZABLE_KEYS = {
     "recording.action.start",
     "recording.error.finalization_failed.format",
     "recording.system_audio",
+    "recording.audio_source",
+    "recording.audio_source.microphone",
+    "recording.microphone.device",
+    "recording.microphone.request_permission",
+    "recording.error.audio_mixing_not_supported",
     "recording.audio.state.completed",
     "recording.metadata.audio_sync_difference",
 }

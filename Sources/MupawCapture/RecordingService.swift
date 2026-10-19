@@ -23,6 +23,10 @@ public enum RecordingServiceError: Error, LocalizedError, Sendable {
     case crossDisplayRegionUnsupported
     case invalidFrameRate(Int)
     case invalidFormat
+    case audioMixingNotSupported
+    case microphonePermissionRequired(PermissionStatus)
+    case microphoneDeviceNotFound(String)
+    case microphoneDisconnected(String)
     case operationInProgress(String)
     case sessionNotFound(String)
     case sessionNotActive(String)
@@ -53,6 +57,20 @@ public enum RecordingServiceError: Error, LocalizedError, Sendable {
             recordingLocalizedFormat("recording.error.invalid_frame_rate.format", value)
         case .invalidFormat:
             recordingLocalizedString("recording.error.invalid_format")
+        case .audioMixingNotSupported:
+            recordingLocalizedString("recording.error.audio_mixing_not_supported")
+        case .microphonePermissionRequired(let status):
+            recordingLocalizedFormat(
+                "recording.error.microphone_permission_required.format",
+                status.rawValue
+            )
+        case .microphoneDeviceNotFound(let identifier):
+            recordingLocalizedFormat(
+                "recording.error.microphone_device_not_found.format",
+                identifier
+            )
+        case .microphoneDisconnected(let name):
+            recordingLocalizedFormat("recording.error.microphone_disconnected.format", name)
         case .operationInProgress(let identifier):
             recordingLocalizedFormat("recording.error.operation_in_progress.format", identifier)
         case .sessionNotFound(let identifier):
@@ -97,6 +115,8 @@ public final class RecordingService {
         let startedAt: Date
         var phase: RecordingPhase
         var watchdog: Task<Void, Never>?
+        let microphoneDevice: MicrophoneDeviceDescriptor?
+        var microphoneDisconnectObserver: NSObjectProtocol?
 
         init(
             id: String,
@@ -108,7 +128,8 @@ public final class RecordingService {
             writer: RecordingFrameWriter,
             fileURL: URL,
             startedAt: Date,
-            phase: RecordingPhase
+            phase: RecordingPhase,
+            microphoneDevice: MicrophoneDeviceDescriptor?
         ) {
             self.id = id
             self.request = request
@@ -120,6 +141,7 @@ public final class RecordingService {
             self.fileURL = fileURL
             self.startedAt = startedAt
             self.phase = phase
+            self.microphoneDevice = microphoneDevice
         }
     }
 
@@ -132,13 +154,19 @@ public final class RecordingService {
 
     private let paths: MupawPaths
     private let fileManager: FileManager
+    private let microphoneDeviceService: MicrophoneDeviceService
     private var active: ActiveRecording?
     private var terminalStatuses: [String: RecordingSessionStatus] = [:]
     private var terminalOrder: [String] = []
 
-    public init(paths: MupawPaths, fileManager: FileManager = .default) {
+    public init(
+        paths: MupawPaths,
+        fileManager: FileManager = .default,
+        microphoneDeviceService: MicrophoneDeviceService = MicrophoneDeviceService()
+    ) {
         self.paths = paths
         self.fileManager = fileManager
+        self.microphoneDeviceService = microphoneDeviceService
     }
 
     public var hasActiveRecording: Bool {
@@ -156,8 +184,31 @@ public final class RecordingService {
         try validate(request)
         try paths.prepare(fileManager: fileManager)
 
+        let resolvedMicrophone: (device: AVCaptureDevice, descriptor: MicrophoneDeviceDescriptor)?
+        if request.audioSource == .microphone {
+            do {
+                resolvedMicrophone = try microphoneDeviceService.resolveDevice(
+                    identifier: request.microphoneDeviceID
+                )
+            } catch MicrophoneDeviceServiceError.permissionRequired(let status) {
+                throw RecordingServiceError.microphonePermissionRequired(status)
+            } catch MicrophoneDeviceServiceError.deviceNotFound(let identifier) {
+                throw RecordingServiceError.microphoneDeviceNotFound(identifier)
+            } catch MicrophoneDeviceServiceError.noDefaultDevice {
+                throw RecordingServiceError.microphoneDeviceNotFound(
+                    request.microphoneDeviceID ?? "system-default"
+                )
+            }
+        } else {
+            resolvedMicrophone = nil
+        }
+
         let sessionID = UUID().uuidString.lowercased()
-        let prepared = try await prepareRecording(request: request, sessionID: sessionID)
+        let prepared = try await prepareRecording(
+            request: request,
+            sessionID: sessionID,
+            microphoneDeviceID: resolvedMicrophone?.descriptor.id
+        )
         let fileURL = uniqueRecordingURL(request: request)
 
         let writer: RecordingFrameWriter
@@ -168,7 +219,7 @@ public final class RecordingService {
                 pixelHeight: prepared.resolution.pixelHeight,
                 frameRate: request.frameRate,
                 quality: request.quality,
-                includeSystemAudio: request.includeSystemAudio
+                audioSource: request.audioSource
             ) { [weak self] error in
                 Task { @MainActor [weak self] in
                     await self?.failActiveRecording(sessionID: sessionID, error: error)
@@ -196,10 +247,19 @@ public final class RecordingService {
                 type: .screen,
                 sampleHandlerQueue: writer.sampleQueue
             )
-            if request.includeSystemAudio {
+            switch request.audioSource {
+            case .none:
+                break
+            case .systemAudio:
                 try stream.addStreamOutput(
                     writer,
                     type: .audio,
+                    sampleHandlerQueue: writer.sampleQueue
+                )
+            case .microphone:
+                try stream.addStreamOutput(
+                    writer,
+                    type: .microphone,
                     sampleHandlerQueue: writer.sampleQueue
                 )
             }
@@ -219,9 +279,26 @@ public final class RecordingService {
             writer: writer,
             fileURL: fileURL,
             startedAt: startedAt,
-            phase: .starting
+            phase: .starting,
+            microphoneDevice: resolvedMicrophone?.descriptor
         )
         self.active = active
+        if let resolvedMicrophone {
+            active.microphoneDisconnectObserver = NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification,
+                object: resolvedMicrophone.device,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.failActiveRecording(
+                        sessionID: sessionID,
+                        error: RecordingServiceError.microphoneDisconnected(
+                            resolvedMicrophone.descriptor.name
+                        )
+                    )
+                }
+            }
+        }
 
         do {
             try await stream.startCapture()
@@ -241,6 +318,7 @@ public final class RecordingService {
             }
             return status(for: active)
         } catch {
+            removeMicrophoneObserver(from: active)
             self.active = nil
             await writer.cancelAndDelete()
             let status = terminalStatus(
@@ -294,6 +372,7 @@ public final class RecordingService {
                 sessionID: active.id,
                 source: active.source,
                 request: active.request,
+                microphoneDevice: active.microphoneDevice,
                 fileURL: active.fileURL,
                 expectedResolution: active.resolution,
                 metrics: metrics,
@@ -318,10 +397,12 @@ public final class RecordingService {
                 frameCount: artifact.frameCount,
                 artifact: artifact
             )
+            removeMicrophoneObserver(from: active)
             self.active = nil
             remember(status)
             return status
         } catch {
+            removeMicrophoneObserver(from: active)
             await active.writer.cancelAndDelete()
             self.active = nil
             let status = terminalStatus(
@@ -355,6 +436,7 @@ public final class RecordingService {
         active.watchdog?.cancel()
         active.watchdog = nil
         try? await active.stream.stopCapture()
+        removeMicrophoneObserver(from: active)
         await active.writer.cancelAndDelete()
         self.active = nil
         let status = terminalStatus(for: active, phase: .cancelled, errorMessage: nil)
@@ -364,6 +446,7 @@ public final class RecordingService {
 
     public func cancelActiveRecordingForShutdown() {
         guard let active else { return }
+        removeMicrophoneObserver(from: active)
         active.watchdog?.cancel()
         active.writer.cancelAndDeleteImmediately()
         try? fileManager.removeItem(at: active.fileURL)
@@ -376,6 +459,15 @@ public final class RecordingService {
     private func validate(_ request: RecordingRequest) throws {
         guard request.format == .mp4 else {
             throw RecordingServiceError.invalidFormat
+        }
+        guard !request.hasConflictingAudioSelection else {
+            throw RecordingServiceError.audioMixingNotSupported
+        }
+        if request.audioSource != .microphone,
+            let identifier = request.microphoneDeviceID,
+            !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            throw RecordingServiceError.microphoneDeviceNotFound(identifier)
         }
         guard MupawConstants.supportedRecordingFrameRates.contains(request.frameRate) else {
             throw RecordingServiceError.invalidFrameRate(request.frameRate)
@@ -417,7 +509,8 @@ public final class RecordingService {
 
     private func prepareRecording(
         request: RecordingRequest,
-        sessionID: String
+        sessionID: String,
+        microphoneDeviceID: String?
     ) async throws -> PreparedRecording {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false,
@@ -464,7 +557,8 @@ public final class RecordingService {
                     request: request,
                     resolution: resolution,
                     sourceRect: nil,
-                    independentWindow: false
+                    independentWindow: false,
+                    microphoneDeviceID: microphoneDeviceID
                 ),
                 source: source,
                 resolution: resolution
@@ -513,7 +607,8 @@ public final class RecordingService {
                     request: request,
                     resolution: resolution,
                     sourceRect: nil,
-                    independentWindow: true
+                    independentWindow: true,
+                    microphoneDeviceID: microphoneDeviceID
                 ),
                 source: source,
                 resolution: resolution
@@ -578,7 +673,8 @@ public final class RecordingService {
                     request: request,
                     resolution: resolution,
                     sourceRect: cgRect(slice.sourceRectPoints),
-                    independentWindow: false
+                    independentWindow: false,
+                    microphoneDeviceID: microphoneDeviceID
                 ),
                 source: source,
                 resolution: resolution
@@ -590,7 +686,8 @@ public final class RecordingService {
         request: RecordingRequest,
         resolution: RecordingResolution,
         sourceRect: CGRect?,
-        independentWindow: Bool
+        independentWindow: Bool,
+        microphoneDeviceID: String?
     ) -> SCStreamConfiguration {
         let configuration = SCStreamConfiguration()
         configuration.width = resolution.pixelWidth
@@ -602,11 +699,14 @@ public final class RecordingService {
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.queueDepth = 6
         configuration.showsCursor = request.includeCursor
-        configuration.capturesAudio = request.includeSystemAudio
-        configuration.sampleRate = MupawConstants.recordingSystemAudioSampleRate
-        configuration.channelCount = MupawConstants.recordingSystemAudioChannelCount
+        configuration.capturesAudio = request.audioSource == .systemAudio
+        if request.audioSource == .systemAudio {
+            configuration.sampleRate = MupawConstants.recordingSystemAudioSampleRate
+            configuration.channelCount = MupawConstants.recordingSystemAudioChannelCount
+        }
         configuration.excludesCurrentProcessAudio = true
-        configuration.captureMicrophone = false
+        configuration.captureMicrophone = request.audioSource == .microphone
+        configuration.microphoneCaptureDeviceID = microphoneDeviceID
         configuration.scalesToFit = true
         configuration.preservesAspectRatio = true
         configuration.captureResolution = .best
@@ -708,7 +808,7 @@ public final class RecordingService {
         metrics: RecordingFrameMetrics,
         phase: RecordingPhase
     ) -> RecordingAudioInfo {
-        guard active.request.includeSystemAudio else { return .disabled }
+        guard active.request.audioSource.isEnabled else { return .disabled }
         let state: RecordingAudioState =
             switch phase {
             case .starting, .recording, .stopping:
@@ -720,20 +820,33 @@ public final class RecordingService {
             case .cancelled:
                 .cancelled
             }
+        let fallbackSampleRate =
+            active.request.audioSource == .systemAudio
+            ? MupawConstants.recordingSystemAudioSampleRate
+            : MupawConstants.recordingMicrophoneAudioSampleRate
         return RecordingAudioInfo(
             requested: true,
+            source: active.request.audioSource,
             state: state,
             codec: .aac,
             trackCount: 0,
-            sampleRate: metrics.audioSampleRate
-                ?? MupawConstants.recordingSystemAudioSampleRate,
-            channelCount: metrics.audioChannelCount
-                ?? MupawConstants.recordingSystemAudioChannelCount,
+            sampleRate: metrics.audioSampleRate ?? fallbackSampleRate,
+            channelCount: metrics.audioChannelCount,
             durationSeconds: metrics.audioSampleBufferCount > 0
                 ? metrics.audioDurationSeconds
                 : nil,
-            sampleBufferCount: metrics.audioSampleBufferCount
+            sampleBufferCount: metrics.audioSampleBufferCount,
+            deviceID: active.microphoneDevice?.id,
+            deviceName: active.microphoneDevice?.name
         )
+
+    }
+
+    private func removeMicrophoneObserver(from active: ActiveRecording) {
+        if let observer = active.microphoneDisconnectObserver {
+            NotificationCenter.default.removeObserver(observer)
+            active.microphoneDisconnectObserver = nil
+        }
     }
 
     private func failActiveRecording(sessionID: String, error: Error) async {
@@ -742,6 +855,7 @@ public final class RecordingService {
         active.watchdog?.cancel()
         active.watchdog = nil
         try? await active.stream.stopCapture()
+        removeMicrophoneObserver(from: active)
         await active.writer.cancelAndDelete()
         self.active = nil
         remember(

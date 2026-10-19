@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, screenshot capture, H.264 MP4 recording sessions with optional AAC system audio, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
+                        "Exposes status, display/window/microphone discovery, screenshot capture, H.264 MP4 recording sessions with no audio, system audio, or one microphone, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -70,10 +70,10 @@ public enum CapabilityCatalog {
                 ),
                 .init(
                     id: "recording",
-                    title: "H.264 MP4 recording with optional system audio",
+                    title: "H.264 MP4 recording with one optional audio source",
                     availability: .available,
                     detail:
-                        "Records an explicit display, independent window, or single-display structured region through ScreenCaptureKit and AVAssetWriter with optional 48 kHz stereo AAC system audio, start/status/stop/cancel, metadata, SHA-256, synchronization validation, and preview. Microphone, camera, mixing, event overlays, GIF, and zoom remain planned."
+                        "Records an explicit display, independent window, or single-display structured region through ScreenCaptureKit and AVAssetWriter with no audio, 48 kHz stereo AAC system audio, or one selected microphone encoded as AAC. Includes device discovery, permission-aware start/status/stop/cancel, metadata, SHA-256, synchronization validation, and preview. Mixing, camera, event overlays, GIF, and zoom remain planned."
                 ),
                 .init(
                     id: "automatic-zoom",

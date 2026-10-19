@@ -24,6 +24,8 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(decoded.format, .mp4)
         XCTAssertEqual(decoded.region?.coordinateSpace, .globalDisplayPoints)
         XCTAssertTrue(decoded.includeSystemAudio)
+        XCTAssertEqual(decoded.audioSource, .systemAudio)
+        XCTAssertFalse(decoded.includeMicrophone)
     }
 
     func testLegacyRecordingRequestDefaultsSystemAudioOff() throws {
@@ -46,20 +48,25 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(request.quality, .standard)
         XCTAssertTrue(request.includeCursor)
         XCTAssertFalse(request.includeSystemAudio)
+        XCTAssertFalse(request.includeMicrophone)
+        XCTAssertEqual(request.audioSource, .none)
         XCTAssertTrue(request.excludeMupawUI)
     }
 
     func testRecordingAudioInfoRoundTrip() throws {
         let value = RecordingAudioInfo(
             requested: true,
+            source: .microphone,
             state: .completed,
             codec: .aac,
             trackCount: 1,
             sampleRate: 48_000,
-            channelCount: 2,
+            channelCount: 1,
             durationSeconds: 4.25,
             sampleBufferCount: 200,
-            audioVideoDurationDifferenceSeconds: 0.04
+            audioVideoDurationDifferenceSeconds: 0.04,
+            deviceID: "mic-1",
+            deviceName: "Test Microphone"
         )
 
         let data = try JSONEncoder.mupaw.encode(value)
@@ -68,6 +75,91 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(decoded, value)
         XCTAssertEqual(RecordingAudioInfo.disabled.state, .disabled)
         XCTAssertFalse(RecordingAudioInfo.disabled.requested)
+        XCTAssertEqual(decoded.source, .microphone)
+        XCTAssertEqual(decoded.deviceID, "mic-1")
+        XCTAssertEqual(decoded.deviceName, "Test Microphone")
+        XCTAssertEqual(RecordingAudioInfo.disabled.source, .none)
+    }
+
+    func testMicrophoneRequestRoundTripAndLegacyCompatibility() throws {
+        let request = RecordingRequest(
+            mode: .window,
+            sourceID: "window:42",
+            audioSource: .microphone,
+            microphoneDeviceID: "mic-1"
+        )
+        let roundTrip = try JSONDecoder.mupaw.decode(
+            RecordingRequest.self,
+            from: JSONEncoder.mupaw.encode(request)
+        )
+        XCTAssertEqual(roundTrip.audioSource, .microphone)
+        XCTAssertTrue(roundTrip.includeMicrophone)
+        XCTAssertFalse(roundTrip.includeSystemAudio)
+        XCTAssertEqual(roundTrip.microphoneDeviceID, "mic-1")
+        XCTAssertFalse(roundTrip.hasConflictingAudioSelection)
+
+        let legacyData = Data(
+            """
+            {
+              "mode": "window",
+              "sourceID": "window:42",
+              "includeMicrophone": true,
+              "microphoneDeviceID": "legacy-mic"
+            }
+            """.utf8
+        )
+        let legacy = try JSONDecoder.mupaw.decode(RecordingRequest.self, from: legacyData)
+        XCTAssertEqual(legacy.audioSource, .microphone)
+        XCTAssertTrue(legacy.includeMicrophone)
+        XCTAssertEqual(legacy.microphoneDeviceID, "legacy-mic")
+    }
+
+    func testConflictingAudioSelectionsAreDetected() throws {
+        let bothLegacy = try JSONDecoder.mupaw.decode(
+            RecordingRequest.self,
+            from: Data(
+                """
+                {
+                  "mode": "window",
+                  "sourceID": "window:42",
+                  "includeSystemAudio": true,
+                  "includeMicrophone": true
+                }
+                """.utf8
+            )
+        )
+        XCTAssertTrue(bothLegacy.hasConflictingAudioSelection)
+
+        let contradictory = RecordingRequest(
+            mode: .window,
+            sourceID: "window:42",
+            audioSource: .systemAudio,
+            includeMicrophone: true
+        )
+        XCTAssertTrue(contradictory.hasConflictingAudioSelection)
+    }
+
+    func testMicrophoneDeviceDescriptorsRoundTrip() throws {
+        let value = MicrophoneDeviceListResult(
+            permission: .authorized,
+            defaultDeviceID: "mic-1",
+            devices: [
+                MicrophoneDeviceDescriptor(
+                    id: "mic-1",
+                    name: "Built-in Microphone",
+                    manufacturer: "Apple",
+                    isDefault: true,
+                    isConnected: true
+                )
+            ]
+        )
+        let decoded = try JSONDecoder.mupaw.decode(
+            MicrophoneDeviceListResult.self,
+            from: JSONEncoder.mupaw.encode(value)
+        )
+        XCTAssertEqual(decoded.permission, value.permission)
+        XCTAssertEqual(decoded.defaultDeviceID, value.defaultDeviceID)
+        XCTAssertEqual(decoded.devices, value.devices)
     }
 
     func testResolutionPlannerPreservesAspectAndBoundsSixK() throws {

@@ -47,6 +47,13 @@ public final class PermissionService {
         return granted
     }
 
+    public func requestMicrophoneAccess() async -> Bool {
+        invalidateCache()
+        let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        invalidateCache()
+        return granted
+    }
+
     private static func status(for mediaType: AVMediaType) -> PermissionStatus {
         switch AVCaptureDevice.authorizationStatus(for: mediaType) {
         case .authorized:

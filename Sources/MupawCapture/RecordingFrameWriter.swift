@@ -76,10 +76,10 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
 
     private let outputURL: URL
     private let frameRate: Int
-    private let includeSystemAudio: Bool
+    private let audioSource: RecordingAudioSource
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
-    private let audioInput: AVAssetWriterInput?
+    private var audioInput: AVAssetWriterInput?
     private let stateLock = NSLock()
     private let onFailure: @Sendable (Error) -> Void
 
@@ -99,6 +99,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     private var terminalError: Error?
     private var isFinishing = false
     private var didReportFailure = false
+    private var didStartWriting = false
 
     init(
         outputURL: URL,
@@ -106,12 +107,12 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         pixelHeight: Int,
         frameRate: Int,
         quality: RecordingVideoQuality,
-        includeSystemAudio: Bool,
+        audioSource: RecordingAudioSource,
         onFailure: @escaping @Sendable (Error) -> Void
     ) throws {
         self.outputURL = outputURL
         self.frameRate = frameRate
-        self.includeSystemAudio = includeSystemAudio
+        self.audioSource = audioSource
         self.sampleQueue = DispatchQueue(
             label: "com.xiaodou.mupaw.recording.frames.\(UUID().uuidString)",
             qos: .userInitiated
@@ -149,7 +150,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         }
         writer.add(videoInput)
 
-        if includeSystemAudio {
+        if audioSource == .systemAudio {
             let audioSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: MupawConstants.recordingSystemAudioSampleRate,
@@ -163,6 +164,8 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             }
             writer.add(input)
             self.audioInput = input
+            self.actualAudioSampleRate = MupawConstants.recordingSystemAudioSampleRate
+            self.actualAudioChannelCount = MupawConstants.recordingSystemAudioChannelCount
         } else {
             self.audioInput = nil
         }
@@ -170,11 +173,6 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     }
 
     func prepare() throws {
-        guard writer.startWriting() else {
-            throw RecordingFrameWriterError.couldNotStartWriting(
-                writer.error?.localizedDescription ?? "Unknown writer error."
-            )
-        }
         stateLock.lock()
         wallClockStartedAt = Date()
         stateLock.unlock()
@@ -197,11 +195,12 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             receiveVideo(sampleBuffer)
 
         case .audio:
-            guard includeSystemAudio else { return }
+            guard audioSource == .systemAudio else { return }
             receiveAudio(sampleBuffer)
 
         case .microphone:
-            return
+            guard audioSource == .microphone else { return }
+            receiveAudio(sampleBuffer)
 
         @unknown default:
             return
@@ -250,7 +249,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                     continuation.resume(throwing: failure)
                     return
                 }
-                if includeSystemAudio,
+                if requiresAudio,
                     audioCount <= 0,
                     pendingAudioCount <= 0,
                     frameCount > 0 || pendingVideoCount > 0
@@ -268,7 +267,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                     continuation.resume(throwing: RecordingFrameWriterError.noVideoFrames)
                     return
                 }
-                if includeSystemAudio, audioCount <= 0 || lastAudioEnd == nil {
+                if requiresAudio, audioCount <= 0 || lastAudioEnd == nil {
                     cancelWriterAndDelete()
                     continuation.resume(throwing: RecordingFrameWriterError.noAudioSamples)
                     return
@@ -359,6 +358,9 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
 
     private func receiveAudio(_ sampleBuffer: CMSampleBuffer) {
         guard sampleIsAcceptable(sampleBuffer), validateAudioFormat(sampleBuffer) else { return }
+        if audioSource == .microphone, !ensureMicrophoneAudioInput(sampleBuffer) {
+            return
+        }
         stateLock.lock()
         let hasStarted = sessionStartTime != nil
         if !hasStarted {
@@ -382,7 +384,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         stateLock.lock()
         guard sessionStartTime == nil,
             !pendingVideoSamples.isEmpty,
-            !includeSystemAudio || !pendingAudioSamples.isEmpty,
+            !requiresAudio || !pendingAudioSamples.isEmpty,
             terminalError == nil,
             !isFinishing
         else {
@@ -406,6 +408,17 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         pendingAudioSamples.removeAll(keepingCapacity: false)
         stateLock.unlock()
 
+        guard writer.startWriting() else {
+            reportFailure(
+                RecordingFrameWriterError.couldNotStartWriting(
+                    writer.error?.localizedDescription ?? "Unknown writer error."
+                )
+            )
+            return
+        }
+        stateLock.lock()
+        didStartWriting = true
+        stateLock.unlock()
         writer.startSession(atSourceTime: startTime)
         for sample in pending.sorted(by: {
             CMTimeCompare($0.presentationTime, $1.presentationTime) < 0
@@ -547,18 +560,69 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             reportFailure(RecordingFrameWriterError.invalidAudioFormat)
             return false
         }
-        let sampleRate = Int(basic.mSampleRate.rounded())
-        let channelCount = Int(basic.mChannelsPerFrame)
-        guard sampleRate == MupawConstants.recordingSystemAudioSampleRate,
-            channelCount == MupawConstants.recordingSystemAudioChannelCount
+        let sourceSampleRate = Int(basic.mSampleRate.rounded())
+        let sourceChannelCount = Int(basic.mChannelsPerFrame)
+        guard sourceSampleRate > 0, sourceChannelCount > 0 else {
+            reportFailure(RecordingFrameWriterError.invalidAudioFormat)
+            return false
+        }
+
+        if audioSource == .systemAudio {
+            guard sourceSampleRate == MupawConstants.recordingSystemAudioSampleRate,
+                sourceChannelCount == MupawConstants.recordingSystemAudioChannelCount
+            else {
+                reportFailure(RecordingFrameWriterError.invalidAudioFormat)
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ensureMicrophoneAudioInput(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        stateLock.lock()
+        let existingInput = audioInput
+        let writingStarted = didStartWriting
+        stateLock.unlock()
+        if existingInput != nil { return true }
+        guard audioSource == .microphone, !writingStarted,
+            let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+            let basic = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee
         else {
             reportFailure(RecordingFrameWriterError.invalidAudioFormat)
             return false
         }
 
+        let sourceChannels = Int(basic.mChannelsPerFrame)
+        let outputChannels = min(
+            MupawConstants.maximumRecordingMicrophoneChannelCount,
+            max(1, sourceChannels)
+        )
+        let bitRate =
+            outputChannels == 1
+            ? MupawConstants.recordingMicrophoneAudioBitRate
+            : MupawConstants.recordingSystemAudioBitRate
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: MupawConstants.recordingMicrophoneAudioSampleRate,
+            AVNumberOfChannelsKey: outputChannels,
+            AVEncoderBitRateKey: bitRate,
+        ]
+        let input = AVAssetWriterInput(
+            mediaType: .audio,
+            outputSettings: settings,
+            sourceFormatHint: formatDescription
+        )
+        input.expectsMediaDataInRealTime = true
+        guard writer.canAdd(input) else {
+            reportFailure(RecordingFrameWriterError.couldNotAddAudioInput)
+            return false
+        }
+        writer.add(input)
+
         stateLock.lock()
-        actualAudioSampleRate = sampleRate
-        actualAudioChannelCount = channelCount
+        audioInput = input
+        actualAudioSampleRate = MupawConstants.recordingMicrophoneAudioSampleRate
+        actualAudioChannelCount = outputChannels
         stateLock.unlock()
         return true
     }
@@ -570,7 +634,12 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
             return CMTimeAdd(presentationTime, duration)
         }
         let sampleCount = CMSampleBufferGetNumSamples(sampleBuffer)
-        let durationSeconds = Double(sampleCount) / Double(MupawConstants.recordingSystemAudioSampleRate)
+        let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer)
+        let sourceRate =
+            formatDescription.flatMap {
+                CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mSampleRate
+            } ?? Double(MupawConstants.recordingSystemAudioSampleRate)
+        let durationSeconds = Double(sampleCount) / max(1, sourceRate)
         return CMTimeAdd(
             presentationTime,
             CMTime(seconds: durationSeconds, preferredTimescale: 60_000)
@@ -618,6 +687,10 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         if shouldReport {
             onFailure(error)
         }
+    }
+
+    private var requiresAudio: Bool {
+        audioSource.isEnabled
     }
 
     private func cancelWriterAndDelete() {

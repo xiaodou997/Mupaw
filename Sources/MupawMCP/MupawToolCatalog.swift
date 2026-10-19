@@ -21,6 +21,12 @@ internal enum MupawToolCatalog {
             inputSchema: emptyObjectSchema
         ),
         Tool(
+            name: "mupaw_microphones_list",
+            description:
+                "List available microphone input devices, stable device IDs, the system default device, connection state, and current microphone permission. Use a returned microphone_device_id; do not invent identifiers.",
+            inputSchema: emptyObjectSchema
+        ),
+        Tool(
             name: "mupaw_screenshot_capture",
             description:
                 "Capture an explicit full_screen, window, or structured region as PNG. full_screen and window require an exact source_id returned by mupaw_sources_list. region requires a rectangle in global_display_points and never simulates UI clicks. The result includes artifact metadata and a bounded preview.",
@@ -101,19 +107,19 @@ internal enum MupawToolCatalog {
         Tool(
             name: "mupaw_recording_start",
             description:
-                "Start one application-owned H.264 MP4 recording with optional AAC system audio and return a stable session ID after ScreenCaptureKit starts. Supports full_screen, window, or a structured single-display region. Microphone, camera, mixing, click, keystroke, GIF, and zoom features are not included in M2a.",
+                "Start one application-owned H.264 MP4 recording with no audio, system audio, or one microphone and return a stable session ID after ScreenCaptureKit starts. Supports full_screen, window, or a structured single-display region. System-audio/microphone mixing, camera, click, keystroke, GIF, and zoom features are not included in M2b.",
             inputSchema: recordingStartSchema
         ),
         Tool(
             name: "mupaw_recording_status",
             description:
-                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, system-audio state/sample count/duration, and the completed artifact when available.",
+                "Poll a recording session by session_id. Returns phase, elapsed duration, frame count, dimensions, audio source/state/device/sample count/duration, and the completed artifact when available.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
             name: "mupaw_recording_stop",
             description:
-                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, H.264 video validation, and requested AAC system-audio validation are complete.",
+                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, H.264 video validation, and requested AAC system-audio or microphone validation are complete.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
@@ -355,11 +361,36 @@ internal enum MupawToolCatalog {
                 "type": .string("boolean"),
                 "default": .bool(false),
             ]),
+            "audio_source": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("none"),
+                    .string("system_audio"),
+                    .string("microphone"),
+                ]),
+                "default": .string("none"),
+                "description": .string(
+                    "Select no audio, system audio, or one microphone. M2b rejects system-audio/microphone mixing."
+                ),
+            ]),
             "include_system_audio": .object([
                 "type": .string("boolean"),
                 "default": .bool(false),
                 "description": .string(
-                    "Capture system audio as one AAC stereo track. When true, missing or invalid audio fails finalization instead of silently producing a video-only file."
+                    "Legacy compatibility flag for audio_source=system_audio. Do not combine it with microphone selection."
+                ),
+            ]),
+            "include_microphone": .object([
+                "type": .string("boolean"),
+                "default": .bool(false),
+                "description": .string(
+                    "Legacy compatibility flag for audio_source=microphone. Do not combine it with system audio."
+                ),
+            ]),
+            "microphone_device_id": .object([
+                "type": .string("string"),
+                "description": .string(
+                    "Optional exact microphone ID from mupaw_microphones_list. Omit to use the current system default. Valid only for microphone audio."
                 ),
             ]),
             "exclude_mupaw_ui": .object([

@@ -52,7 +52,9 @@ final class AppModel {
     var includeCursor = false
     var recordingFrameRate = 30
     var recordingQuality: RecordingVideoQuality = .standard
-    var recordingSystemAudio = false
+    var recordingAudioSource: RecordingAudioSource = .none
+    private(set) var microphoneDevices: [MicrophoneDeviceDescriptor] = []
+    var selectedMicrophoneDeviceID: String?
     private(set) var currentRecordingStatus: RecordingSessionStatus?
     private(set) var lastRecordingArtifact: RecordingArtifact?
     private(set) var lastArtifact: ScreenshotArtifact?
@@ -100,6 +102,7 @@ final class AppModel {
     private let recordingService: RecordingService
     private let projectService: ScreenshotProjectService
     private let permissionService = PermissionService()
+    private let microphoneDeviceService: MicrophoneDeviceService
     private let regionSelectionController = RegionSelectionController()
     private var rpcServer: AgentRPCServer?
     private var hotKeyManager: GlobalHotKeyManager?
@@ -113,7 +116,12 @@ final class AppModel {
             let paths = try MupawPaths.live()
             self.paths = paths
             self.captureService = CaptureService(paths: paths)
-            self.recordingService = RecordingService(paths: paths)
+            let microphoneDeviceService = MicrophoneDeviceService()
+            self.microphoneDeviceService = microphoneDeviceService
+            self.recordingService = RecordingService(
+                paths: paths,
+                microphoneDeviceService: microphoneDeviceService
+            )
             self.projectService = ScreenshotProjectService(
                 paths: paths,
                 textRecognizer: IsolatedVisionScreenshotTextRecognizer()
@@ -125,7 +133,12 @@ final class AppModel {
             )
             self.paths = fallback
             self.captureService = CaptureService(paths: fallback)
-            self.recordingService = RecordingService(paths: fallback)
+            let microphoneDeviceService = MicrophoneDeviceService()
+            self.microphoneDeviceService = microphoneDeviceService
+            self.recordingService = RecordingService(
+                paths: fallback,
+                microphoneDeviceService: microphoneDeviceService
+            )
             self.projectService = ScreenshotProjectService(
                 paths: fallback,
                 textRecognizer: IsolatedVisionScreenshotTextRecognizer()
@@ -141,6 +154,7 @@ final class AppModel {
         guard !hasStarted else { return }
         hasStarted = true
         refreshPermissions()
+        refreshMicrophoneDevices(showErrors: false)
         startTrackingExternalApplications()
         startGlobalHotKeys()
 
@@ -192,6 +206,38 @@ final class AppModel {
         if permissions.screenCapture == .authorized {
             Task { await refreshSources(showErrors: false) }
         }
+    }
+
+    func requestMicrophonePermission() async {
+        _ = await permissionService.requestMicrophoneAccess()
+        refreshPermissions()
+        refreshMicrophoneDevices(showErrors: false)
+    }
+
+    func refreshMicrophoneDevices(showErrors: Bool = true) {
+        let result = microphoneDeviceService.listDevices()
+        microphoneDevices = result.devices
+        if let selectedMicrophoneDeviceID,
+            microphoneDevices.contains(where: { $0.id == selectedMicrophoneDeviceID })
+        {
+            return
+        }
+        selectedMicrophoneDeviceID =
+            result.defaultDeviceID
+            ?? microphoneDevices.first(where: { $0.isDefault })?.id
+            ?? microphoneDevices.first?.id
+        if showErrors, recordingAudioSource == .microphone, microphoneDevices.isEmpty {
+            errorMessage = L10n.string("recording.error.no_microphone_devices")
+        }
+    }
+
+    func openMicrophonePrivacySettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            )
+        else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func refreshSources(showErrors: Bool = true) async {
@@ -448,6 +494,17 @@ final class AppModel {
             errorMessage = AppCaptureError.permissionRequired.localizedDescription
             return
         }
+        if recordingAudioSource == .microphone {
+            guard permissions.microphone == .authorized else {
+                errorMessage = L10n.string("recording.error.microphone_permission_required")
+                return
+            }
+            refreshMicrophoneDevices(showErrors: false)
+            guard selectedMicrophoneDeviceID != nil else {
+                errorMessage = L10n.string("recording.error.no_microphone_devices")
+                return
+            }
+        }
 
         isBusy = true
         errorMessage = nil
@@ -485,7 +542,10 @@ final class AppModel {
                     frameRate: recordingFrameRate,
                     quality: recordingQuality,
                     includeCursor: includeCursor,
-                    includeSystemAudio: recordingSystemAudio,
+                    audioSource: recordingAudioSource,
+                    microphoneDeviceID: recordingAudioSource == .microphone
+                        ? selectedMicrophoneDeviceID
+                        : nil,
                     excludeMupawUI: selectedCaptureMode != .window
                 )
             )
@@ -1019,6 +1079,30 @@ final class AppModel {
                 message: error.localizedDescription,
                 details: .object(["session_id": .string(sessionID)])
             )
+        case .audioMixingNotSupported:
+            return .failure(
+                id: requestID,
+                code: .audioMixingNotSupported,
+                message: error.localizedDescription
+            )
+        case .microphonePermissionRequired:
+            return .failure(
+                id: requestID,
+                code: .microphonePermissionRequired,
+                message: error.localizedDescription
+            )
+        case .microphoneDeviceNotFound:
+            return .failure(
+                id: requestID,
+                code: .microphoneDeviceNotFound,
+                message: error.localizedDescription
+            )
+        case .microphoneDisconnected:
+            return .failure(
+                id: requestID,
+                code: .recordingFailed,
+                message: error.localizedDescription
+            )
         case .sessionNotFound:
             return .failure(
                 id: requestID,
@@ -1085,6 +1169,15 @@ final class AppModel {
                 let result = try await captureService.listSources()
                 sources = result.sources
                 normalizeSelectedSource()
+                return try .success(id: request.id, value: result)
+
+            case .microphonesList:
+                refreshPermissions(forceRefresh: false)
+                let result = microphoneDeviceService.listDevices()
+                microphoneDevices = result.devices
+                if selectedMicrophoneDeviceID == nil {
+                    selectedMicrophoneDeviceID = result.defaultDeviceID ?? result.devices.first?.id
+                }
                 return try .success(id: request.id, value: result)
 
             case .screenshotCapture:

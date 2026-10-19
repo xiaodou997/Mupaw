@@ -115,6 +115,17 @@ enum L10n {
         }
     }
 
+    static func recordingAudioSource(_ source: RecordingAudioSource) -> String {
+        switch source {
+        case .none:
+            return string("recording.audio_source.none")
+        case .systemAudio:
+            return string("recording.audio_source.system_audio")
+        case .microphone:
+            return string("recording.audio_source.microphone")
+        }
+    }
+
     static func recordingPhase(_ phase: RecordingPhase) -> String {
         switch phase {
         case .starting:

@@ -270,6 +270,9 @@ def start_recording(
     quality: str,
     file_name: str,
     include_system_audio: bool = False,
+    audio_source: str | None = None,
+    include_microphone: bool = False,
+    microphone_device_id: str | None = None,
 ) -> dict[str, Any]:
     arguments: dict[str, Any] = {
         "mode": mode,
@@ -278,11 +281,16 @@ def start_recording(
         "quality": quality,
         "include_cursor": False,
         "include_system_audio": include_system_audio,
+        "include_microphone": include_microphone,
         "exclude_mupaw_ui": mode != "window",
         "file_name": file_name,
     }
     if source_id is not None:
         arguments["source_id"] = source_id
+    if audio_source is not None:
+        arguments["audio_source"] = audio_source
+    if microphone_device_id is not None:
+        arguments["microphone_device_id"] = microphone_device_id
     if region is not None:
         arguments["region"] = region
     result = base.parse_json_result(
@@ -299,6 +307,8 @@ def start_recording(
         result,
         expected_frame_rate=frame_rate,
         expected_system_audio=include_system_audio,
+        expected_audio_source=audio_source,
+        expected_device_id=microphone_device_id,
     )
     return result
 
@@ -308,6 +318,8 @@ def validate_active_status(
     *,
     expected_frame_rate: int,
     expected_system_audio: bool = False,
+    expected_audio_source: str | None = None,
+    expected_device_id: str | None = None,
 ) -> None:
     session_id = status.get("id")
     if not isinstance(session_id, str):
@@ -333,17 +345,24 @@ def validate_active_status(
     audio = status.get("audio")
     if not isinstance(audio, dict):
         raise base.SmokeFailure("recording status omitted audio state")
-    if expected_system_audio:
+    resolved_audio_source = expected_audio_source or (
+        "system_audio" if expected_system_audio else "none"
+    )
+    if resolved_audio_source != "none":
         if audio.get("requested") is not True or audio.get("state") not in {
             "waiting",
             "capturing",
         }:
-            raise base.SmokeFailure("recording status did not expose requested system audio")
-        if audio.get("codec") != "aac":
-            raise base.SmokeFailure("recording status omitted AAC target identity")
+            raise base.SmokeFailure("recording status did not expose requested audio")
+        if audio.get("codec") != "aac" or audio.get("source") != resolved_audio_source:
+            raise base.SmokeFailure("recording status omitted AAC audio-source identity")
+        if expected_device_id is not None and audio.get("deviceID") != expected_device_id:
+            raise base.SmokeFailure("recording status microphone device mismatch")
     else:
         if audio.get("requested") is not False or audio.get("state") != "disabled":
-            raise base.SmokeFailure("video-only recording unexpectedly enabled system audio")
+            raise base.SmokeFailure("video-only recording unexpectedly enabled audio")
+        if audio.get("source") not in {None, "none"}:
+            raise base.SmokeFailure("video-only recording returned an audio source")
 
 
 def poll_status(
@@ -425,6 +444,8 @@ def validate_completed(
     expected_frame_rate: int,
     minimum_duration: float,
     expected_system_audio: bool = False,
+    expected_audio_source: str | None = None,
+    expected_device_id: str | None = None,
     minimum_audio_rms: float | None = None,
 ) -> dict[str, Any]:
     tool_name = "mupaw_recording_stop"
@@ -513,15 +534,27 @@ def validate_completed(
         raise base.SmokeFailure("AVFoundation did not mark the MP4 playable")
     if inspection.get("videoTrackCount") != 1:
         raise base.SmokeFailure("recording MP4 must contain exactly one video track")
-    if expected_system_audio:
+    resolved_audio_source = expected_audio_source or (
+        "system_audio" if expected_system_audio else "none"
+    )
+    if resolved_audio_source != "none":
         if inspection.get("audioTrackCount") != 1:
-            raise base.SmokeFailure("M2a MP4 must contain one requested system-audio track")
+            raise base.SmokeFailure("MP4 must contain one requested AAC audio track")
         if audio.get("requested") is not True or audio.get("state") != "completed":
-            raise base.SmokeFailure("recording artifact did not complete requested system audio")
+            raise base.SmokeFailure("recording artifact did not complete requested audio")
         if audio.get("codec") != "aac" or audio.get("trackCount") != 1:
             raise base.SmokeFailure("recording artifact AAC track metadata is invalid")
-        if audio.get("sampleRate") != 48000 or audio.get("channelCount") != 2:
-            raise base.SmokeFailure("recording artifact system-audio format is invalid")
+        if audio.get("source") != resolved_audio_source:
+            raise base.SmokeFailure("recording artifact audio source mismatch")
+        if audio.get("sampleRate") != 48000:
+            raise base.SmokeFailure("recording artifact audio sample rate is invalid")
+        channel_count = audio.get("channelCount")
+        if resolved_audio_source == "system_audio" and channel_count != 2:
+            raise base.SmokeFailure("recording artifact system-audio channel count is invalid")
+        if resolved_audio_source == "microphone" and channel_count not in {1, 2}:
+            raise base.SmokeFailure("recording artifact microphone channel count is invalid")
+        if expected_device_id is not None and audio.get("deviceID") != expected_device_id:
+            raise base.SmokeFailure("recording artifact microphone device mismatch")
         audio_duration = audio.get("durationSeconds")
         difference = audio.get("audioVideoDurationDifferenceSeconds")
         if not isinstance(audio_duration, (int, float)) or audio_duration <= 0:
@@ -531,8 +564,10 @@ def validate_completed(
         audio_codec = str(inspection.get("audioCodecFourCC", "")).strip().lower()
         if not audio_codec.startswith("aac"):
             raise base.SmokeFailure(f"MP4 audio track is not AAC: {audio_codec!r}")
-        if inspection.get("audioSampleRate") != 48000 or inspection.get("audioChannelCount") != 2:
-            raise base.SmokeFailure("inspected AAC track format does not match metadata")
+        if inspection.get("audioSampleRate") != 48000:
+            raise base.SmokeFailure("inspected AAC sample rate does not match metadata")
+        if inspection.get("audioChannelCount") != channel_count:
+            raise base.SmokeFailure("inspected AAC channel count does not match metadata")
         inspected_audio_duration = inspection.get("audioDurationSeconds")
         if (
             not isinstance(inspected_audio_duration, (int, float))
@@ -544,16 +579,18 @@ def validate_completed(
             peak = inspection.get("audioPeak")
             sample_count = inspection.get("decodedAudioSampleCount")
             if not isinstance(rms, (int, float)) or rms < minimum_audio_rms:
-                raise base.SmokeFailure("captured system audio is silent or below the RMS threshold")
+                raise base.SmokeFailure("captured audio is silent or below the RMS threshold")
             if not isinstance(peak, (int, float)) or peak <= minimum_audio_rms:
-                raise base.SmokeFailure("captured system audio peak is invalid")
+                raise base.SmokeFailure("captured audio peak is invalid")
             if not isinstance(sample_count, int) or sample_count <= 0:
                 raise base.SmokeFailure("MP4 inspector decoded no audio samples")
     else:
         if inspection.get("audioTrackCount") != 0:
-            raise base.SmokeFailure("video-only M1e MP4 unexpectedly contains audio")
+            raise base.SmokeFailure("video-only MP4 unexpectedly contains audio")
         if audio.get("requested") is not False or audio.get("state") != "disabled":
-            raise base.SmokeFailure("video-only artifact unexpectedly reports system audio")
+            raise base.SmokeFailure("video-only artifact unexpectedly reports audio")
+        if audio.get("source") not in {None, "none"}:
+            raise base.SmokeFailure("video-only artifact returned an audio source")
     if inspection.get("pixelWidth") != width or inspection.get("pixelHeight") != height:
         raise base.SmokeFailure("MP4 track dimensions do not match artifact metadata")
     inspected_duration = inspection.get("durationSeconds")
@@ -575,6 +612,7 @@ def validate_completed(
         "byteCount": byte_count,
         "sha256": expected_hash,
         "inspection": inspection,
+        "audio": audio,
     }
 
 

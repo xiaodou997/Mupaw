@@ -31,6 +31,14 @@ internal struct MupawToolRouter: Sendable {
                 )
                 return success(result)
 
+            case "mupaw_microphones_list":
+                let result: MicrophoneDeviceListResult = try await call(
+                    method: .microphonesList,
+                    payload: EmptyPayload(),
+                    responseType: MicrophoneDeviceListResult.self
+                )
+                return success(result)
+
             case "mupaw_screenshot_capture":
                 return try await screenshot(arguments: arguments)
 
@@ -184,7 +192,7 @@ internal struct MupawToolRouter: Sendable {
         let arguments = arguments ?? [:]
         let formatValue = arguments["format"]?.stringValue ?? RecordingFormat.mp4.rawValue
         guard let format = RecordingFormat(rawValue: formatValue), format == .mp4 else {
-            return failure("M2a supports H.264 MP4 recording with optional AAC system audio.")
+            return failure("M2b supports H.264 MP4 recording with one optional AAC audio source.")
         }
 
         guard let modeValue = arguments["mode"]?.stringValue,
@@ -223,6 +231,48 @@ internal struct MupawToolRouter: Sendable {
             return failure("quality must be standard or high.")
         }
 
+        let explicitAudioSource: RecordingAudioSource?
+        if let value = arguments["audio_source"]?.stringValue {
+            guard let parsed = RecordingAudioSource(rawValue: value) else {
+                return failure("audio_source must be none, system_audio, or microphone.")
+            }
+            explicitAudioSource = parsed
+        } else {
+            explicitAudioSource = nil
+        }
+        let includeSystemAudio = arguments["include_system_audio"]?.boolValue ?? false
+        let includeMicrophone = arguments["include_microphone"]?.boolValue ?? false
+        if includeSystemAudio && includeMicrophone {
+            return failure(
+                "Mupaw request failed [audio_mixing_not_supported]: M2b does not mix system audio and microphone input."
+            )
+        }
+        let audioSource: RecordingAudioSource
+        if let explicitAudioSource {
+            audioSource = explicitAudioSource
+            if includeSystemAudio, explicitAudioSource != .systemAudio {
+                return failure(
+                    "Mupaw request failed [audio_mixing_not_supported]: audio_source conflicts with include_system_audio."
+                )
+            }
+            if includeMicrophone, explicitAudioSource != .microphone {
+                return failure(
+                    "Mupaw request failed [audio_mixing_not_supported]: audio_source conflicts with include_microphone."
+                )
+            }
+        } else if includeSystemAudio {
+            audioSource = .systemAudio
+        } else if includeMicrophone {
+            audioSource = .microphone
+        } else {
+            audioSource = .none
+        }
+        let microphoneDeviceID = arguments["microphone_device_id"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if audioSource != .microphone, let microphoneDeviceID, !microphoneDeviceID.isEmpty {
+            return failure("microphone_device_id is valid only when audio_source is microphone.")
+        }
+
         let request = RecordingRequest(
             mode: mode,
             sourceID: sourceID,
@@ -231,7 +281,10 @@ internal struct MupawToolRouter: Sendable {
             frameRate: frameRate,
             quality: quality,
             includeCursor: arguments["include_cursor"]?.boolValue ?? false,
-            includeSystemAudio: arguments["include_system_audio"]?.boolValue ?? false,
+            audioSource: audioSource,
+            includeSystemAudio: includeSystemAudio,
+            includeMicrophone: includeMicrophone,
+            microphoneDeviceID: microphoneDeviceID,
             excludeMupawUI: arguments["exclude_mupaw_ui"]?.boolValue ?? true,
             fileName: arguments["file_name"]?.stringValue
         )
