@@ -36,19 +36,19 @@ enum RecordingFrameWriterError: Error, LocalizedError, Sendable {
         case .couldNotAddVideoInput:
             "The MP4 writer could not accept its video input."
         case .couldNotAddAudioInput:
-            "The MP4 writer could not accept its AAC system-audio input."
+            "The MP4 writer could not accept its AAC audio input."
         case .couldNotStartWriting(let message):
             "The MP4 writer could not start: \(message)"
         case .appendFailed(let message):
             "The MP4 writer could not append a video frame: \(message)"
         case .audioAppendFailed(let message):
-            "The MP4 writer could not append system audio: \(message)"
+            "The MP4 writer could not append the selected audio source: \(message)"
         case .invalidAudioFormat:
-            "ScreenCaptureKit returned system audio in an unexpected format."
+            "ScreenCaptureKit returned audio in an unexpected format."
         case .noVideoFrames:
             "The recording ended before Mupaw received a video frame."
         case .noAudioSamples:
-            "System audio was requested, but Mupaw received no audio samples."
+            "Audio was requested, but Mupaw received no audio samples."
         case .pendingSamplesExceeded(let track):
             "The \(track) track did not become ready before its pending-sample limit was reached."
         case .finishFailed(let message):
@@ -60,9 +60,19 @@ enum RecordingFrameWriterError: Error, LocalizedError, Sendable {
 }
 
 final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
-    let sampleQueue: DispatchQueue
+    let videoOutputQueue: DispatchQueue
+    let audioOutputQueue: DispatchQueue
+    private let sampleQueue: DispatchQueue
 
     private enum PendingSample {
+        final class BufferBox: @unchecked Sendable {
+            let value: CMSampleBuffer
+
+            init(_ value: CMSampleBuffer) {
+                self.value = value
+            }
+        }
+
         case video(CMSampleBuffer)
         case audio(CMSampleBuffer)
 
@@ -113,8 +123,17 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         self.outputURL = outputURL
         self.frameRate = frameRate
         self.audioSource = audioSource
+        let queueIdentifier = UUID().uuidString
+        self.videoOutputQueue = DispatchQueue(
+            label: "com.xiaodou.mupaw.recording.output.video.\(queueIdentifier)",
+            qos: .userInitiated
+        )
+        self.audioOutputQueue = DispatchQueue(
+            label: "com.xiaodou.mupaw.recording.output.audio.\(queueIdentifier)",
+            qos: .userInitiated
+        )
         self.sampleQueue = DispatchQueue(
-            label: "com.xiaodou.mupaw.recording.frames.\(UUID().uuidString)",
+            label: "com.xiaodou.mupaw.recording.writer.\(queueIdentifier)",
             qos: .userInitiated
         )
         self.onFailure = onFailure
@@ -184,7 +203,16 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         of outputType: SCStreamOutputType
     ) {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+        let box = PendingSample.BufferBox(sampleBuffer)
+        sampleQueue.async { [self, box] in
+            processSampleBuffer(box.value, outputType: outputType)
+        }
+    }
 
+    private func processSampleBuffer(
+        _ sampleBuffer: CMSampleBuffer,
+        outputType: SCStreamOutputType
+    ) {
         switch outputType {
         case .screen:
             guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil,
@@ -220,8 +248,14 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
         )
     }
 
+    private func drainOutputQueues() {
+        videoOutputQueue.sync {}
+        audioOutputQueue.sync {}
+    }
+
     func finish() async throws -> RecordingFrameMetrics {
-        try await withCheckedThrowingContinuation { continuation in
+        drainOutputQueues()
+        return try await withCheckedThrowingContinuation { continuation in
             sampleQueue.async { [self] in
                 startSessionAndFlushPendingIfReady()
 
@@ -315,6 +349,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     }
 
     func cancelAndDelete() async {
+        drainOutputQueues()
         await withCheckedContinuation { continuation in
             sampleQueue.async { [self] in
                 stateLock.lock()
@@ -327,6 +362,7 @@ final class RecordingFrameWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     }
 
     func cancelAndDeleteImmediately() {
+        drainOutputQueues()
         sampleQueue.async { [self] in
             stateLock.lock()
             isFinishing = true

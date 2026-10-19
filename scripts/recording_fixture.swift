@@ -37,6 +37,14 @@ final class RecordingFixtureDelegate: NSObject, NSApplicationDelegate {
         window.title = "Mupaw Recording Fixture"
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor(calibratedRed: 0.08, green: 0.18, blue: 0.40, alpha: 1)
+        window.level = .screenSaver
+        window.collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary,
+            .ignoresCycle,
+        ]
+        window.hidesOnDeactivate = false
 
         let root = NSView(frame: NSRect(origin: .zero, size: size))
         root.autoresizingMask = [.width, .height]

@@ -245,7 +245,7 @@ public final class RecordingService {
             try stream.addStreamOutput(
                 writer,
                 type: .screen,
-                sampleHandlerQueue: writer.sampleQueue
+                sampleHandlerQueue: writer.videoOutputQueue
             )
             switch request.audioSource {
             case .none:
@@ -254,13 +254,13 @@ public final class RecordingService {
                 try stream.addStreamOutput(
                     writer,
                     type: .audio,
-                    sampleHandlerQueue: writer.sampleQueue
+                    sampleHandlerQueue: writer.audioOutputQueue
                 )
             case .microphone:
                 try stream.addStreamOutput(
                     writer,
                     type: .microphone,
-                    sampleHandlerQueue: writer.sampleQueue
+                    sampleHandlerQueue: writer.audioOutputQueue
                 )
             }
         } catch {

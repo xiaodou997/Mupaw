@@ -10,18 +10,61 @@ import mcp_smoke as base
 
 TONE_PATH = Path("/tmp/mupaw-m2b-microphone-tone.wav")
 MINIMUM_MICROPHONE_RMS = 0.0001
+ACOUSTIC_TONE_DURATION_SECONDS = 8.0
+MICROPHONE_WARMUP_SECONDS = 0.75
 
 def file_set(prefix: str) -> set[Path]:
     return {p.resolve() for p in m1e.RECORDINGS_ROOT.glob(f"{prefix}*.mp4")}
 
+
+def current_output_volume() -> tuple[int | None, bool | None]:
+    volume_result = subprocess.run(
+        ["osascript", "-e", "output volume of (get volume settings)"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    mute_result = subprocess.run(
+        ["osascript", "-e", "output muted of (get volume settings)"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    try:
+        volume = int(volume_result.stdout.strip()) if volume_result.returncode == 0 else None
+    except ValueError:
+        volume = None
+    if mute_result.returncode != 0:
+        muted = None
+    else:
+        muted = mute_result.stdout.strip().lower() == "true"
+    return volume, muted
+
+
+def set_output_volume(volume: int, muted: bool) -> None:
+    mute_clause = "with output muted" if muted else "without output muted"
+    subprocess.run(
+        ["osascript", "-e", f"set volume output volume {max(0, min(100, volume))} {mute_clause}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+
 def run(executable: Path) -> dict[str, Any]:
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise base.SmokeFailure(f"MCP executable is missing or not executable: {executable}")
-    m2a.generate_two_tone(TONE_PATH, duration_seconds=5.0)
+    m2a.generate_two_tone(
+        TONE_PATH,
+        duration_seconds=ACOUSTIC_TONE_DURATION_SECONDS,
+    )
     m1e.prepare_recording_fixture()
     process = subprocess.Popen([str(executable)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     active_sessions: set[str] = set()
     tone_process: subprocess.Popen[bytes] | None = None
+    original_volume, original_muted = current_output_volume()
     try:
         tools = m1e.initialize(process)
         names = {i.get("name") for i in tools if isinstance(i, dict)}
@@ -82,16 +125,40 @@ def run(executable: Path) -> dict[str, Any]:
             audio_source="microphone", microphone_device_id=device_id)
         session_id = started["id"]
         active_sessions.add(session_id)
-        tone_process = subprocess.Popen(["/usr/bin/afplay", str(TONE_PATH)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.2)
-        active = m1e.poll_status(process, 31, session_id)
-        m1e.validate_active_status(active, expected_frame_rate=30, expected_audio_source="microphone", expected_device_id=device_id)
-        if active.get("audio", {}).get("sampleBufferCount", 0) <= 0:
-            raise base.SmokeFailure("active microphone recording received no samples")
+        time.sleep(MICROPHONE_WARMUP_SECONDS)
+        set_output_volume(100, muted=False)
+        tone_process = subprocess.Popen(
+            ["/usr/bin/afplay", str(TONE_PATH)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        active: dict[str, Any] | None = None
+        request_id = 31
+        while tone_process.poll() is None:
+            time.sleep(0.5)
+            active = m1e.poll_status(process, request_id, session_id)
+            request_id += 1
+            if active.get("phase") not in {"starting", "recording", "stopping"}:
+                raise base.SmokeFailure(
+                    "microphone recording became terminal before stop: "
+                    + json.dumps(active, ensure_ascii=False, sort_keys=True)
+                )
+            m1e.validate_active_status(
+                active,
+                expected_frame_rate=30,
+                expected_audio_source="microphone",
+                expected_device_id=device_id,
+            )
         tone_process.wait(timeout=10)
         tone_process = None
-        time.sleep(0.35)
-        result = base.call_tool(process, 32, "mupaw_recording_stop", {"session_id": session_id}, timeout=120)
+        time.sleep(0.5)
+        result = base.call_tool(
+            process,
+            request_id,
+            "mupaw_recording_stop",
+            {"session_id": session_id},
+            timeout=120,
+        )
         microphone = m1e.validate_completed(
             result, expected_session_id=session_id, expected_source_kind="window",
             expected_frame_rate=30, minimum_duration=4.0,
@@ -138,6 +205,11 @@ def run(executable: Path) -> dict[str, Any]:
         try: process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             process.kill(); process.wait(timeout=2)
+        if original_volume is not None:
+            set_output_volume(
+                original_volume,
+                muted=original_muted if original_muted is not None else False,
+            )
         TONE_PATH.unlink(missing_ok=True)
         m1e.stop_recording_fixture()
 

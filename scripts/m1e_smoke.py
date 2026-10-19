@@ -190,6 +190,22 @@ def prepare_recording_fixture() -> None:
             "Could not launch the safe recording fixture: "
             + (launch_result.stderr.strip() or launch_result.stdout.strip())
         )
+    activate_recording_fixture()
+
+
+def activate_recording_fixture() -> None:
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            f'tell application id "{FIXTURE_BUNDLE_ID}" to activate',
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+    time.sleep(0.5)
 
 
 def stop_recording_fixture() -> None:
@@ -216,6 +232,8 @@ def fixture_window(sources: list[Any]) -> dict[str, Any] | None:
         if isinstance(item, dict)
         and item.get("kind") == "window"
         and item.get("applicationBundleIdentifier") == FIXTURE_BUNDLE_ID
+        and int(item.get("pixelWidth", 0)) >= 800
+        and int(item.get("pixelHeight", 0)) >= 500
     ]
     if not candidates:
         return None
@@ -234,7 +252,10 @@ def select_mupaw_window_with_retry(
         return source
 
     last_sources: list[Any] = sources
+    activate_recording_fixture()
     for attempt in range(24):
+        if attempt > 0 and attempt % 8 == 0:
+            activate_recording_fixture()
         time.sleep(0.25)
         payload = base.parse_json_result(
             base.call_tool(process, request_id + attempt, "mupaw_sources_list"),
