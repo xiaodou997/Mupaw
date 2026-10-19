@@ -50,6 +50,9 @@ enum InspectMP4 {
             var audioRMS: Double = 0
             var audioPeak: Double = 0
             var decodedAudioSampleCount = 0
+            var audioSegmentRMS: [Double] = []
+            var audioSegmentPeak: [Double] = []
+            var audioSegmentSampleCounts: [Int] = []
             if let audioTrack = audioTracks.first {
                 let descriptions = try await audioTrack.load(.formatDescriptions)
                 if let description = descriptions.first {
@@ -67,6 +70,9 @@ enum InspectMP4 {
                 audioRMS = levels.rms
                 audioPeak = levels.peak
                 decodedAudioSampleCount = levels.sampleCount
+                audioSegmentRMS = levels.segmentRMS
+                audioSegmentPeak = levels.segmentPeak
+                audioSegmentSampleCounts = levels.segmentSampleCounts
             }
 
             let seconds = CMTimeGetSeconds(duration)
@@ -89,6 +95,9 @@ enum InspectMP4 {
                 "audioRMS": audioRMS,
                 "audioPeak": audioPeak,
                 "decodedAudioSampleCount": decodedAudioSampleCount,
+                "audioSegmentRMS": audioSegmentRMS,
+                "audioSegmentPeak": audioSegmentPeak,
+                "audioSegmentSampleCounts": audioSegmentSampleCounts,
             ]
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
             FileHandle.standardOutput.write(data)
@@ -102,7 +111,14 @@ enum InspectMP4 {
     private static func audioLevels(
         asset: AVAsset,
         track: AVAssetTrack
-    ) throws -> (rms: Double, peak: Double, sampleCount: Int) {
+    ) throws -> (
+        rms: Double,
+        peak: Double,
+        sampleCount: Int,
+        segmentRMS: [Double],
+        segmentPeak: [Double],
+        segmentSampleCounts: [Int]
+    ) {
         let reader = try AVAssetReader(asset: asset)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -112,16 +128,23 @@ enum InspectMP4 {
             AVLinearPCMIsNonInterleaved: false,
         ]
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
-        guard reader.canAdd(output) else { return (0, 0, 0) }
+        guard reader.canAdd(output) else { return (0, 0, 0, [], [], []) }
         reader.add(output)
         guard reader.startReading() else {
             throw reader.error ?? NSError(domain: "MupawInspectMP4", code: 1)
         }
 
-        let maximumSamples = 1_000_000
+        let maximumSamples = 2_000_000
+        let segmentCount = 4
+        let trackRange = track.timeRange
+        let trackStart = CMTimeGetSeconds(trackRange.start)
+        let trackDuration = max(0.001, CMTimeGetSeconds(trackRange.duration))
         var sumSquares: Double = 0
         var peak: Double = 0
         var sampleCount = 0
+        var segmentSumSquares = Array(repeating: 0.0, count: segmentCount)
+        var segmentPeaks = Array(repeating: 0.0, count: segmentCount)
+        var segmentSampleCounts = Array(repeating: 0, count: segmentCount)
         while sampleCount < maximumSamples, let buffer = output.copyNextSampleBuffer() {
             defer { CMSampleBufferInvalidate(buffer) }
             guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
@@ -136,17 +159,28 @@ enum InspectMP4 {
             )
             guard status == kCMBlockBufferNoErr, let pointer, totalLength >= 2 else { continue }
             let available = min(totalLength / MemoryLayout<Int16>.size, maximumSamples - sampleCount)
+            let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(buffer))
+            let normalizedPosition = max(0, min(0.999_999, (timestamp - trackStart) / trackDuration))
+            let segmentIndex = min(segmentCount - 1, Int(normalizedPosition * Double(segmentCount)))
             pointer.withMemoryRebound(to: Int16.self, capacity: available) { samples in
                 for index in 0..<available {
                     let normalized = Double(samples[index]) / Double(Int16.max)
-                    sumSquares += normalized * normalized
-                    peak = max(peak, abs(normalized))
+                    let square = normalized * normalized
+                    let absolute = abs(normalized)
+                    sumSquares += square
+                    peak = max(peak, absolute)
+                    segmentSumSquares[segmentIndex] += square
+                    segmentPeaks[segmentIndex] = max(segmentPeaks[segmentIndex], absolute)
                 }
             }
             sampleCount += available
+            segmentSampleCounts[segmentIndex] += available
         }
         let rms = sampleCount > 0 ? sqrt(sumSquares / Double(sampleCount)) : 0
-        return (rms, peak, sampleCount)
+        let segmentRMS = zip(segmentSumSquares, segmentSampleCounts).map { sum, count in
+            count > 0 ? sqrt(sum / Double(count)) : 0
+        }
+        return (rms, peak, sampleCount, segmentRMS, segmentPeaks, segmentSampleCounts)
     }
 
     private static func fourCC(_ value: FourCharCode) -> String {

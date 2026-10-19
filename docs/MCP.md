@@ -1,4 +1,4 @@
-# Mupaw MCP contract — M0 through M2b
+# Mupaw MCP contract — M0 through M2c
 
 The executable product is `mupaw-mcp`. It communicates with MCP clients over stdio and forwards screenshot capture, MP4 recording sessions, editing, visual styling, OCR, and color analysis to a running `Mupaw.app` instance. The helper never requests screen permission, captures or records independently, reads arbitrary source files, or drives Mupaw's UI.
 
@@ -10,7 +10,7 @@ Returns whether the app responds, app and protocol versions, process ID, and rel
 
 ### `mupaw_capabilities_get`
 
-Returns the implemented and planned capability matrix. M2b reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available. Recording supports no audio, system audio, or one microphone; mixing remains planned.
+Returns the implemented and planned capability matrix. M2c reports `source-enumeration`, `screenshot`, `region-capture`, `recording`, `screenshot-editing`, `visual-style`, `ocr`, `color-sampling`, and `agent-mcp` as available. Recording supports no audio, system audio, one microphone, or controlled system-audio/microphone mixing with live levels.
 
 ### `mupaw_sources_list`
 
@@ -45,7 +45,7 @@ For full-screen and window capture, omit `region` and provide an exact `display:
 
 ## Recording tools
 
-M2b records H.264 MP4 with one mutually exclusive audio source: `none`, `system_audio`, or `microphone`. Omitting audio fields preserves the M1e video-only contract. `include_system_audio` and `include_microphone` remain legacy compatibility fields; simultaneous or contradictory selections return `audio_mixing_not_supported` without creating a file. Mixing, camera, clicks, keystrokes, GIF, and zoom events are not included.
+M2c records H.264 MP4 with `none`, `system_audio`, `microphone`, or `system_audio_and_microphone`. Omitting audio fields preserves the M1e video-only contract. Legacy `include_system_audio` and `include_microphone` remain compatible; both true resolve to the mixed source. An explicit canonical source that contradicts either legacy flag returns `audio_mixing_not_supported` without creating a file. Camera, clicks, keystrokes, GIF, timeline editing, and zoom events are not included.
 
 ### `mupaw_recording_start`
 
@@ -80,6 +80,29 @@ Microphone example:
 }
 ```
 
+Mixed-audio example:
+
+```json
+{
+  "mode": "region",
+  "region": {
+    "coordinate_space": "global_display_points",
+    "x": 120,
+    "y": 80,
+    "width": 960,
+    "height": 540
+  },
+  "frame_rate": 30,
+  "quality": "standard",
+  "audio_source": "system_audio_and_microphone",
+  "microphone_device_id": "exact-id-from-mupaw_microphones_list",
+  "system_audio_gain": 0.8,
+  "microphone_gain": 1.25,
+  "system_audio_muted": false,
+  "microphone_muted": false
+}
+```
+
 Structured region example:
 
 ```json
@@ -99,7 +122,7 @@ Structured region example:
 }
 ```
 
-`full_screen` and `window` require an exact source ID from `mupaw_sources_list`; `region` supplies a rectangle wholly inside one display. `frame_rate` is 15, 30, or 60; `quality` is `standard` or `high`. `microphone_device_id` is valid only for microphone audio and may be omitted to use the current default. Microphone permission must already be authorized. The result includes the stable session ID, source, dimensions, phase, elapsed duration, frame count, audio source/state, selected microphone identity, sample count, sample rate, channels, and current audio duration when available.
+`full_screen` and `window` require an exact source ID from `mupaw_sources_list`; `region` supplies a rectangle wholly inside one display. `frame_rate` is 15, 30, or 60; `quality` is `standard` or `high`. `microphone_device_id` is valid whenever the source uses microphone input and may be omitted to use the current default. Microphone permission must already be authorized. Gains are finite linear values from `0.0` through `2.0`, default to `1.0`, and mutes default to `false`. The result includes the stable session ID, source, dimensions, phase, elapsed duration, frame count, current controls, selected microphone identity, per-source sample counts/formats/timestamps/RMS/peak/stale state, and an estimated controlled mixed level.
 
 ### `mupaw_recording_status`
 
@@ -109,15 +132,29 @@ Structured region example:
 
 Returns active or retained terminal state. Active phases are `starting`, `recording`, and `stopping`; terminal phases are `completed`, `failed`, and `cancelled`.
 
+### `mupaw_recording_update_audio_controls`
+
+```json
+{
+  "session_id": "recording-session-uuid",
+  "system_audio_gain": 0.35,
+  "microphone_gain": 1.5,
+  "system_audio_muted": false,
+  "microphone_muted": true
+}
+```
+
+Updates any provided gain or mute fields on the active recording. At least one field is required. Source and microphone device selection cannot change after start. The returned status reflects the committed controls immediately; finalization applies the bounded control-event timeline to the single AAC output track.
+
 ### `mupaw_recording_stop`
 
 ```json
 {"session_id": "recording-session-uuid"}
 ```
 
-Stops the stream and waits for finalization. A completed artifact includes the owner-only MP4 URL, H.264 identity, actual dimensions and duration, requested/average frame rate, frame count, audio source/state/device, AAC track count, sample rate, channels, audio duration, sample-buffer count, synchronization difference, byte count, SHA-256, timestamps, and preview.
+Stops the stream and waits for capture finalization plus audio post-processing. Audio-enabled capture uses an owner-only intermediate MOV; Mupaw then applies the runtime control timeline with AVFoundation, writes one final AAC track into MP4, and deletes the intermediate before returning. A completed artifact includes the owner-only MP4 URL, H.264 identity, actual dimensions and duration, requested/average frame rate, frame count, audio source/state/device, controls/control-event count, per-source sample and level summaries, AAC track count, sample rate, channels, audio duration, synchronization difference, byte count, SHA-256, timestamps, and preview.
 
-Completion requires one playable H.264 video track. `none` requires zero audio tracks; `system_audio` requires one 48 kHz stereo AAC track; `microphone` requires one 48 kHz mono/stereo AAC track. Requested audio must have positive duration and remain within 0.25 seconds of video. Missing permission, an unavailable/disconnected device, missing samples, or invalid output fails explicitly and removes the partial file.
+Completion requires one playable H.264 video track. `none` requires zero audio tracks; every enabled single-source or mixed mode requires exactly one 48 kHz stereo AAC track. Every requested source must provide valid samples, final audio must have positive duration, and audio/video duration difference must remain within 0.25 seconds. Missing permission, unavailable/disconnected devices, a source that fails to start or stalls, conversion/mix/write failure, or invalid final output fails explicitly and removes intermediate and final partial files.
 
 ### `mupaw_recording_cancel`
 
@@ -125,7 +162,7 @@ Completion requires one playable H.264 video track. `none` requires zero audio t
 {"session_id": "recording-session-uuid"}
 ```
 
-Stops capture, cancels AVAssetWriter, deletes incomplete output, and returns `cancelled` without an artifact. Recording dimensions, queues, duration, files, and terminal history remain bounded; static video receives the held final frame so wall-clock duration stays correct.
+Stops capture, cancels AVAssetWriter, deletes intermediate/final incomplete output, and returns `cancelled` without an artifact. Recording dimensions, queues, duration, control-event history, files, and terminal history remain bounded; static video receives the held final frame so wall-clock duration stays correct.
 
 
 ## Screenshot project tools
@@ -362,7 +399,8 @@ Exports an owner-only PNG under Mupaw's `Exports` directory. Returns project rev
 - `recording_failed`: no completed MP4 is claimed; inspect the accompanying stream/writer/finalization message;
 - `microphone_permission_required`: grant microphone permission to the signed Mupaw app before microphone recording;
 - `microphone_device_not_found`: refresh `mupaw_microphones_list` and use a connected returned device, or omit the ID for the current default;
-- `audio_mixing_not_supported`: choose either system audio or microphone; M2b does not mix both;
+- `audio_mixing_not_supported`: remove explicit/legacy source contradictions; both legacy flags are valid and select M2c mixing;
+- `invalid_audio_controls`: provide at least one update field and keep gains within the finite `0.0...2.0` range;
 - `source_not_found`: refresh sources and use a returned source ID;
 - `invalid_region`: correct region coordinates or active-display intersection;
 - `artifact_not_found`: the project source file no longer exists;
@@ -390,8 +428,9 @@ make m1d-smoke
 make m1e-smoke
 make m2a-smoke
 make m2b-smoke
+make m2c-smoke
 make rpc-negative-smoke
-make m2b-acceptance
+make m2c-acceptance
 ```
 
 `make m1b-smoke` performs a real capture, project creation, atomic crop/arrow/text/mosaic batches, update/delete/add, stale-revision and invalid-edit checks, undo, redo, reset, restore, preview, export, file/hash/dimension validation, and original-image immutability verification.
@@ -404,7 +443,9 @@ make m2b-acceptance
 
 `make m2a-smoke` verifies the video-only compatibility path and a genuine non-silent 48 kHz stereo AAC system-audio recording with bounded synchronization.
 
-`make m2b-smoke` discovers the current default microphone, rejects mixing and invalid-device requests without creating files, acoustically records a deterministic tone through the selected microphone, verifies one non-silent 48 kHz mono/stereo AAC track plus device metadata and synchronization, and confirms cancellation removes partial output.
+`make m2b-smoke` discovers the current default microphone, verifies legacy dual booleans now resolve to the M2c mixed source, rejects invalid devices without creating files, acoustically records a deterministic tone through the selected microphone, verifies one non-silent 48 kHz stereo AAC final track plus device metadata and synchronization, and confirms cancellation removes partial output.
+
+`make m2c-smoke` records a safe structured region while simultaneously capturing deterministic system audio and real acoustic microphone input. It validates separate live RMS/peak/timestamps, stale handling, invalid controls, explicit/legacy conflicts, runtime system-only/microphone-only/rebalanced phases, one final 48 kHz stereo AAC track, numerically distinct decoded phase RMS values, synchronization, hashes, permissions, playback, and cancellation cleanup.
 
 `make m1e-full-screen-smoke` additionally records the primary display. Cover it with non-sensitive test content first; this mode is intentionally separate from the default acceptance gate.
 

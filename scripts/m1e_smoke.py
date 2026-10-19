@@ -294,6 +294,10 @@ def start_recording(
     audio_source: str | None = None,
     include_microphone: bool = False,
     microphone_device_id: str | None = None,
+    system_audio_gain: float = 1.0,
+    microphone_gain: float = 1.0,
+    system_audio_muted: bool = False,
+    microphone_muted: bool = False,
 ) -> dict[str, Any]:
     arguments: dict[str, Any] = {
         "mode": mode,
@@ -303,6 +307,10 @@ def start_recording(
         "include_cursor": False,
         "include_system_audio": include_system_audio,
         "include_microphone": include_microphone,
+        "system_audio_gain": system_audio_gain,
+        "microphone_gain": microphone_gain,
+        "system_audio_muted": system_audio_muted,
+        "microphone_muted": microphone_muted,
         "exclude_mupaw_ui": mode != "window",
         "file_name": file_name,
     }
@@ -570,7 +578,7 @@ def validate_completed(
         if audio.get("sampleRate") != 48000:
             raise base.SmokeFailure("recording artifact audio sample rate is invalid")
         channel_count = audio.get("channelCount")
-        if resolved_audio_source == "system_audio" and channel_count != 2:
+        if resolved_audio_source in {"system_audio", "system_audio_and_microphone"} and channel_count != 2:
             raise base.SmokeFailure("recording artifact system-audio channel count is invalid")
         if resolved_audio_source == "microphone" and channel_count not in {1, 2}:
             raise base.SmokeFailure("recording artifact microphone channel count is invalid")

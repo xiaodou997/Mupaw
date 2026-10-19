@@ -1,13 +1,13 @@
 # M2b acceptance criteria
 
-M2b is complete only when one selected microphone can be recorded independently without changing the video-only or system-audio contracts. Mixing, level controls, camera, GIF, event overlays, editing, and zoom remain out of scope.
+This document preserves the M2b single-microphone acceptance boundary. The current M2c implementation retains every M2b path while adding mixing and controls; see `M2C-ACCEPTANCE.md` for the active release gate.
 
 ## Compatibility and source selection
 
 - The canonical audio source is `none`, `system_audio`, or `microphone`.
 - Requests that omit audio fields remain video-only.
 - Legacy `include_system_audio` and `include_microphone` decode to the corresponding source.
-- Simultaneous or contradictory source requests return `audio_mixing_not_supported` before creating an output file.
+- In the M2c-compatible protocol, both legacy booleans now select `system_audio_and_microphone`; an explicit canonical source that contradicts a legacy flag still returns `audio_mixing_not_supported` before file creation.
 - A microphone device ID is accepted only for microphone audio.
 
 ## Permission and device discovery
@@ -53,7 +53,7 @@ Completion requires one playable H.264 video track and exactly one 48 kHz mono/s
 `make m2b-smoke` launches a safe animated fixture, selects the current default microphone, and plays an owner-only deterministic 48 kHz two-tone through the system output so the microphone captures genuine acoustic audio. It validates:
 
 - microphone permission and at least one connected input device;
-- mixing rejection and no file creation;
+- legacy dual-boolean resolution to the mixed source followed by cancellation cleanup;
 - invalid-device rejection and no file creation;
 - active microphone source/device/sample metadata;
 - one H.264 video track and one AAC microphone track;
@@ -73,6 +73,6 @@ make m2b-acceptance
 
 The Mac must be unlocked with Screen & System Audio Recording and microphone permission granted to the stably signed `~/Applications/Mupaw.app`. The gate runs formatting/localization, all unit tests, stable installation, RPC/MCP negative and concurrency checks, M1a–M2a regression, and the real microphone smoke.
 
-## Deferred
+## Superseded scope
 
-M2b does not mix system audio and microphone input, select independent gain levels, mute tracks, render meters/waveforms, capture camera, or edit audio/video timelines.
+M2b originally deferred system-audio/microphone mixing, independent gains, mute controls, and live meters. M2c now implements those items. Camera capture and audio/video timeline editing remain deferred.

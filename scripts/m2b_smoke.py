@@ -97,21 +97,50 @@ def run(executable: Path) -> dict[str, Any]:
         if not isinstance(window_id, str):
             raise base.SmokeFailure("recording fixture omitted its window source ID")
 
-        mixing_prefix = "Mupaw-M2b-Mixing-Rejected"
+        mixing_prefix = "Mupaw-M2b-Legacy-Mix"
         before = file_set(mixing_prefix)
-        mixing_error = base.expect_tool_error(
-            base.call_tool(process, 20, "mupaw_recording_start", {
-                "mode": "window", "source_id": window_id,
-                "include_system_audio": True, "include_microphone": True,
-                "file_name": mixing_prefix,
-            }), "mupaw_recording_start", "audio_mixing_not_supported")
+        mixed_start = base.parse_json_result(
+            base.call_tool(
+                process,
+                20,
+                "mupaw_recording_start",
+                {
+                    "mode": "window",
+                    "source_id": window_id,
+                    "include_system_audio": True,
+                    "include_microphone": True,
+                    "microphone_device_id": device_id,
+                    "file_name": mixing_prefix,
+                },
+                timeout=60,
+            ),
+            "mupaw_recording_start",
+        )
+        mixed_session = mixed_start.get("id")
+        if not isinstance(mixed_session, str):
+            raise base.SmokeFailure("legacy mixed recording omitted session ID")
+        if mixed_start.get("audio", {}).get("source") != "system_audio_and_microphone":
+            raise base.SmokeFailure("legacy dual booleans did not resolve to M2c mixing")
+        mixed_cancel = base.parse_json_result(
+            base.call_tool(
+                process,
+                21,
+                "mupaw_recording_cancel",
+                {"session_id": mixed_session},
+                timeout=60,
+            ),
+            "mupaw_recording_cancel",
+        )
+        if mixed_cancel.get("phase") != "cancelled":
+            raise base.SmokeFailure("legacy mixed recording did not cancel cleanly")
+        time.sleep(0.2)
         if file_set(mixing_prefix) != before:
-            raise base.SmokeFailure("rejected mixing request created an MP4")
+            raise base.SmokeFailure("cancelled legacy mixed request left an MP4")
 
         invalid_prefix = "Mupaw-M2b-Invalid-Microphone"
         before = file_set(invalid_prefix)
         invalid_error = base.expect_tool_error(
-            base.call_tool(process, 21, "mupaw_recording_start", {
+            base.call_tool(process, 22, "mupaw_recording_start", {
                 "mode": "window", "source_id": window_id,
                 "audio_source": "microphone", "microphone_device_id": "mupaw-missing-microphone",
                 "file_name": invalid_prefix,
@@ -189,7 +218,11 @@ def run(executable: Path) -> dict[str, Any]:
         return {
             "appProcessID": app_status.get("processID"), "toolCount": len(tools),
             "microphones": microphones,
-            "negativeChecks": {"mixing": mixing_error, "invalidDevice": invalid_error},
+            "compatibilityChecks": {
+                "legacyDualBooleans": "system_audio_and_microphone",
+                "legacyMixedCancel": mixed_cancel.get("phase"),
+            },
+            "negativeChecks": {"invalidDevice": invalid_error},
             "microphone": microphone,
             "cancel": {"sessionID": cancel_session, "phase": cancelled.get("phase"), "partialFilesRemoved": True},
         }

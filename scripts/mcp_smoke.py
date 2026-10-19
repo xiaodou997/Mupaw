@@ -26,6 +26,7 @@ EXPECTED_TOOLS = {
     "mupaw_screenshot_capture",
     "mupaw_recording_start",
     "mupaw_recording_status",
+    "mupaw_recording_update_audio_controls",
     "mupaw_recording_stop",
     "mupaw_recording_cancel",
     "mupaw_project_create",
@@ -343,13 +344,38 @@ def capture_region_and_validate(
     return summary
 
 
-def select_mupaw_window(sources: list[Any]) -> dict[str, Any] | None:
+def activate_mupaw_app() -> None:
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            'tell application id "com.xiaodou.mupaw" to activate',
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+    time.sleep(0.5)
+
+
+def select_mupaw_window(
+    sources: list[Any],
+    *,
+    minimum_pixel_width: int = 0,
+    minimum_pixel_height: int = 0,
+) -> dict[str, Any] | None:
     candidates = [
         item
         for item in sources
         if isinstance(item, dict)
         and item.get("kind") == "window"
-        and item.get("applicationName") == "Mupaw"
+        and (
+            item.get("applicationBundleIdentifier") == "com.xiaodou.mupaw"
+            or item.get("applicationName") == "Mupaw"
+        )
+        and int(item.get("pixelWidth", 0)) >= minimum_pixel_width
+        and int(item.get("pixelHeight", 0)) >= minimum_pixel_height
     ]
     if not candidates:
         return None
@@ -554,12 +580,48 @@ def run(
             "include_system_audio",
             "include_microphone",
             "microphone_device_id",
+            "system_audio_gain",
+            "microphone_gain",
+            "system_audio_muted",
+            "microphone_muted",
         }
         if not isinstance(recording_properties, dict) or not required_recording_properties.issubset(
             recording_properties
         ):
-            raise SmokeFailure("mupaw_recording_start schema omitted M2b audio properties")
-        tool_schema_check["m2bRecordingProperties"] = sorted(required_recording_properties)
+            raise SmokeFailure("mupaw_recording_start schema omitted M2c audio properties")
+        tool_schema_check["m2cRecordingProperties"] = sorted(required_recording_properties)
+
+        update_audio_tool = next(
+            (
+                item
+                for item in tools
+                if isinstance(item, dict)
+                and item.get("name") == "mupaw_recording_update_audio_controls"
+            ),
+            None,
+        )
+        update_audio_schema = (
+            update_audio_tool.get("inputSchema")
+            if isinstance(update_audio_tool, dict)
+            else None
+        )
+        update_audio_properties = (
+            update_audio_schema.get("properties")
+            if isinstance(update_audio_schema, dict)
+            else None
+        )
+        required_update_properties = {
+            "session_id",
+            "system_audio_gain",
+            "microphone_gain",
+            "system_audio_muted",
+            "microphone_muted",
+        }
+        if not isinstance(update_audio_properties, dict) or not required_update_properties.issubset(
+            update_audio_properties
+        ):
+            raise SmokeFailure("M2c audio-control update schema is incomplete")
+        tool_schema_check["m2cAudioControlProperties"] = sorted(required_update_properties)
         apply_tool = next(
             (
                 item

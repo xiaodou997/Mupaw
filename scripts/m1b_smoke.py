@@ -99,33 +99,49 @@ def capture_fixture(
     if not isinstance(permissions, dict) or permissions.get("screenCapture") != "authorized":
         raise base.SmokeFailure("Screen capture permission is not authorized")
 
-    sources_payload = base.parse_json_result(
-        base.call_tool(process, request_id + 1, "mupaw_sources_list"),
-        "mupaw_sources_list",
-    )
-    sources = sources_payload.get("sources")
-    if not isinstance(sources, list):
-        raise base.SmokeFailure("mupaw_sources_list omitted sources")
-    source = base.select_mupaw_window(sources)
-    if source is None:
-        time.sleep(5.25)
+    base.activate_mupaw_app()
+    source: dict[str, Any] | None = None
+    sources: list[Any] = []
+    for attempt in range(24):
+        if attempt > 0 and attempt % 8 == 0:
+            base.activate_mupaw_app()
         sources_payload = base.parse_json_result(
-            base.call_tool(process, request_id + 2, "mupaw_sources_list"),
+            base.call_tool(process, request_id + 1 + attempt, "mupaw_sources_list"),
             "mupaw_sources_list",
         )
         sources = sources_payload.get("sources")
         if not isinstance(sources, list):
-            raise base.SmokeFailure("refreshed sources payload is invalid")
-        source = base.select_mupaw_window(sources)
+            raise base.SmokeFailure("mupaw_sources_list omitted sources")
+        source = base.select_mupaw_window(
+            sources,
+            minimum_pixel_width=800,
+            minimum_pixel_height=500,
+        )
+        if source is not None:
+            break
+        time.sleep(0.25)
     if source is None:
-        raise base.SmokeFailure("No visible Mupaw window was available for M1b smoke")
+        visible_mupaw_windows = [
+            item
+            for item in sources
+            if isinstance(item, dict)
+            and item.get("kind") == "window"
+            and (
+                item.get("applicationBundleIdentifier") == "com.xiaodou.mupaw"
+                or item.get("applicationName") == "Mupaw"
+            )
+        ]
+        raise base.SmokeFailure(
+            "No full-size visible Mupaw window was available for M1b smoke "
+            f"({len(visible_mupaw_windows)} smaller Mupaw windows were visible)"
+        )
 
     source_id = source.get("id")
     if not isinstance(source_id, str):
         raise base.SmokeFailure("Selected Mupaw source omitted id")
     result = base.call_tool(
         process,
-        request_id + 3,
+        request_id + 30,
         "mupaw_screenshot_capture",
         {
             "mode": "window",

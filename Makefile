@@ -11,7 +11,7 @@ DEV_CODE_SIGN_IDENTITY ?= -
 
 -include .mupaw.local.mk
 
-.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings open-microphone-settings mcp-smoke mcp-smoke-running mcp-smoke-capture mcp-smoke-full-screen mcp-negative-smoke mcp-capture-conflict-smoke m1b-smoke m1c-smoke m1d-smoke m1e-smoke m1e-full-screen-smoke m2a-smoke m2b-smoke rpc-negative-smoke m0-acceptance m1a-acceptance m1b-acceptance m1c-acceptance m1d-acceptance m1e-acceptance m2a-acceptance m2b-acceptance clean open
+.PHONY: generate format localization-check lint build test install-dev uninstall-dev run open-screen-recording-settings open-microphone-settings mcp-smoke mcp-smoke-running mcp-smoke-capture mcp-smoke-full-screen mcp-negative-smoke mcp-capture-conflict-smoke m1b-smoke m1c-smoke m1d-smoke m1e-smoke m1e-full-screen-smoke m2a-smoke m2b-smoke m2c-smoke rpc-negative-smoke m0-acceptance m1a-acceptance m1b-acceptance m1c-acceptance m1d-acceptance m1e-acceptance m2a-acceptance m2b-acceptance m2c-acceptance clean open
 
 generate:
 	xcodegen generate
@@ -114,6 +114,9 @@ m2a-smoke: build
 m2b-smoke: build
 	python3 scripts/m2b_smoke.py --executable "$(MCP_PATH)"
 
+m2c-smoke: build
+	python3 scripts/m2c_smoke.py --executable "$(MCP_PATH)"
+
 rpc-negative-smoke:
 	python3 scripts/rpc_negative_smoke.py
 
@@ -193,6 +196,20 @@ m2b-acceptance:
 	python3 scripts/m1e_smoke.py --executable "$(MCP_PATH)"
 	python3 scripts/m2a_smoke.py --executable "$(MCP_PATH)"
 	python3 scripts/m2b_smoke.py --executable "$(MCP_PATH)"
+
+m2c-acceptance:
+	@$(MAKE) lint
+	@$(MAKE) test
+	@$(MAKE) run
+	python3 scripts/rpc_negative_smoke.py --wait-seconds 15
+	python3 scripts/mcp_smoke.py --executable "$(MCP_PATH)" --require-running --negative --capture-one
+	python3 scripts/m1b_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m1c_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m1d_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m1e_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m2a_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m2b_smoke.py --executable "$(MCP_PATH)"
+	python3 scripts/m2c_smoke.py --executable "$(MCP_PATH)"
 
 open: generate
 	open $(PROJECT)

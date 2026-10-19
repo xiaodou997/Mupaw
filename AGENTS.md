@@ -54,17 +54,19 @@ Mupaw is a source-available macOS 26+ native screenshot and recording tool. Huma
 
 ## Recording rules
 
-- M1e video-only behavior remains the compatibility baseline. M2a added optional system audio; M2b adds one independently selected microphone. A missing audio selection must continue to mean no audio.
-- The canonical audio source is `none`, `system_audio`, or `microphone`. Legacy system/microphone booleans may decode for compatibility, but contradictory or simultaneous selections must be rejected before a file is created.
-- M2b records exactly one optional AAC source. Do not add system-audio/microphone mixing, camera, GIF, click/keystroke overlays, or zoom behavior to this contract.
+- M1e video-only behavior remains the compatibility baseline. M2a added optional system audio, M2b added one selected microphone, and M2c adds controlled mixing. A missing audio selection must continue to mean no audio.
+- The canonical audio source is `none`, `system_audio`, `microphone`, or `system_audio_and_microphone`. Legacy system/microphone booleans remain decodable; both true mean the mixed M2c source. An explicit canonical source that contradicts a legacy flag must fail before file creation.
+- Audio gains are finite linear values from `0.0` through `2.0`. System and microphone mute/gain changes must use the shared recording service and be persisted as bounded control events; UI-only simulation is forbidden.
 - `Mupaw.app` owns microphone permission, device discovery, one recording service, and one active recording session. Agents consume structured device IDs and never drive the UI.
 - Human region recording uses the native AppKit selector. Agent region recording accepts a structured `global_display_points` rectangle and must never operate the UI.
-- Video and the selected audio source share one AVAssetWriter timeline. Buffer the first samples as needed, preserve valid timestamps, and keep audio/video duration difference within the bounded acceptance threshold.
-- Requested system audio or microphone audio that is missing, invalid, disconnected, or unwritable must fail the session and delete partial output; never silently downgrade to video-only or another device.
+- ScreenCaptureKit video, system audio, and microphone callbacks use separate input queues and one serialized writer path. Every requested lane must arrive within the bounded startup window and remain live; missing, stalled, invalid, disconnected, or unwritable input fails the session and deletes all intermediate/final output.
+- Audio-enabled capture first records an owner-only intermediate MOV containing video and the requested source tracks. Finalization uses AVFoundation audio mixing and the bounded control-event timeline to create one owner-only MP4 containing exactly one H.264 track and one 48 kHz stereo AAC track. Never expose or retain the intermediate file as a successful artifact.
+- Live status reports per-source RMS/peak, measurement/source timestamps, stale state, current controls, and an estimated controlled mixed level. Level analysis must remain bounded and must not block capture.
 - A successful start returns a stable session UUID; callers poll status and stop/cancel explicitly. Do not claim a completed artifact before AVAssetWriter finalization, AVFoundation track validation, file permissions, byte count, SHA-256, and preview all succeed.
 - Cancelled, failed, interrupted, source-lost, or microphone-disconnected sessions must remove incomplete files and return terminal state without an artifact.
 - Recording dimensions, frame rates, video/audio bit rates, duration, history, filenames, pending sample queues, and allocation sizes must be bounded. Recordings and files are owner-only.
 - Static sources still require wall-clock-correct MP4 duration; hold the last video frame when ScreenCaptureKit does not deliver repeated unchanged frames.
+- M2c still excludes camera, GIF, click/keystroke overlays, timeline editing, and manual/automatic zoom.
 
 ## Localization rules
 
