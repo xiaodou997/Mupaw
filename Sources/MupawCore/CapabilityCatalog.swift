@@ -25,7 +25,7 @@ public enum CapabilityCatalog {
                     title: "Local MCP control",
                     availability: .available,
                     detail:
-                        "Exposes status, display/window/microphone discovery, screenshot capture, H.264 MP4 recording sessions with no audio, system audio, or one microphone, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
+                        "Exposes status, display/window/microphone discovery, screenshot capture, H.264 MP4 recording sessions with no audio, one source, or controlled system-audio/microphone mixing, live audio controls and levels, versioned screenshot projects, structured edits and visual styling, OCR, color sampling, preview, history, and export to a local Agent."
                 ),
                 .init(
                     id: "region-capture",
@@ -70,10 +70,10 @@ public enum CapabilityCatalog {
                 ),
                 .init(
                     id: "recording",
-                    title: "H.264 MP4 recording with one optional audio source",
+                    title: "H.264 MP4 recording with controlled audio mixing",
                     availability: .available,
                     detail:
-                        "Records an explicit display, independent window, or single-display structured region through ScreenCaptureKit and AVAssetWriter with no audio, 48 kHz stereo AAC system audio, or one selected microphone encoded as AAC. Includes device discovery, permission-aware start/status/stop/cancel, metadata, SHA-256, synchronization validation, and preview. Mixing, camera, event overlays, GIF, and zoom remain planned."
+                        "Records an explicit display, independent window, or single-display structured region with no audio, system audio, one selected microphone, or both mixed into one 48 kHz stereo AAC track. Includes independent runtime gains and mute controls, per-source RMS/peak levels, device discovery, permission-aware start/status/update/stop/cancel, metadata, SHA-256, synchronization validation, and preview. Camera, event overlays, GIF, and zoom remain planned."
                 ),
                 .init(
                     id: "automatic-zoom",

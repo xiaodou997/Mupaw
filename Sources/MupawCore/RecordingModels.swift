@@ -16,8 +16,66 @@ public enum RecordingAudioSource: String, Codable, Sendable, CaseIterable, Hasha
     case none
     case systemAudio = "system_audio"
     case microphone
+    case systemAudioAndMicrophone = "system_audio_and_microphone"
 
     public var isEnabled: Bool { self != .none }
+
+    public var usesSystemAudio: Bool {
+        switch self {
+        case .systemAudio, .systemAudioAndMicrophone:
+            true
+        case .none, .microphone:
+            false
+        }
+    }
+
+    public var usesMicrophone: Bool {
+        switch self {
+        case .microphone, .systemAudioAndMicrophone:
+            true
+        case .none, .systemAudio:
+            false
+        }
+    }
+
+    public var isMixed: Bool { self == .systemAudioAndMicrophone }
+}
+
+public struct RecordingAudioControls: Codable, Sendable, Equatable, Hashable {
+    public let systemAudioGain: Double
+    public let microphoneGain: Double
+    public let systemAudioMuted: Bool
+    public let microphoneMuted: Bool
+
+    public init(
+        systemAudioGain: Double = 1,
+        microphoneGain: Double = 1,
+        systemAudioMuted: Bool = false,
+        microphoneMuted: Bool = false
+    ) {
+        self.systemAudioGain = systemAudioGain
+        self.microphoneGain = microphoneGain
+        self.systemAudioMuted = systemAudioMuted
+        self.microphoneMuted = microphoneMuted
+    }
+
+    public var isValid: Bool {
+        systemAudioGain.isFinite
+            && microphoneGain.isFinite
+            && (MupawConstants.minimumRecordingAudioGain...MupawConstants.maximumRecordingAudioGain)
+                .contains(systemAudioGain)
+            && (MupawConstants.minimumRecordingAudioGain...MupawConstants.maximumRecordingAudioGain)
+                .contains(microphoneGain)
+    }
+
+    public func applying(_ update: RecordingAudioControlUpdateRequest) -> RecordingAudioControls {
+        RecordingAudioControls(
+            systemAudioGain: update.systemAudioGain ?? systemAudioGain,
+            microphoneGain: update.microphoneGain ?? microphoneGain,
+            systemAudioMuted: update.systemAudioMuted ?? systemAudioMuted,
+            microphoneMuted: update.microphoneMuted ?? microphoneMuted
+        )
+    }
 }
 
 public enum RecordingAudioState: String, Codable, Sendable, CaseIterable, Hashable {
@@ -27,6 +85,83 @@ public enum RecordingAudioState: String, Codable, Sendable, CaseIterable, Hashab
     case completed
     case failed
     case cancelled
+}
+
+public struct RecordingAudioLevel: Codable, Sendable, Equatable {
+    public let rms: Double
+    public let peak: Double
+    public let measuredAt: Date
+    public let sourceTimestampSeconds: Double?
+    public let isStale: Bool
+
+    public init(
+        rms: Double,
+        peak: Double,
+        measuredAt: Date,
+        sourceTimestampSeconds: Double? = nil,
+        isStale: Bool = false
+    ) {
+        self.rms = rms
+        self.peak = peak
+        self.measuredAt = measuredAt
+        self.sourceTimestampSeconds = sourceTimestampSeconds
+        self.isStale = isStale
+    }
+}
+
+public struct RecordingAudioLevelSummary: Codable, Sendable, Equatable {
+    public let averageRMS: Double
+    public let maximumPeak: Double
+    public let measurementCount: Int
+
+    public init(averageRMS: Double, maximumPeak: Double, measurementCount: Int) {
+        self.averageRMS = averageRMS
+        self.maximumPeak = maximumPeak
+        self.measurementCount = measurementCount
+    }
+}
+
+public struct RecordingAudioInputInfo: Codable, Sendable, Equatable {
+    public let requested: Bool
+    public let state: RecordingAudioState
+    public let sampleRate: Int?
+    public let channelCount: Int?
+    public let durationSeconds: Double?
+    public let sampleBufferCount: Int
+    public let lastSampleAt: Date?
+    public let lastSourceTimestampSeconds: Double?
+    public let currentLevel: RecordingAudioLevel?
+    public let levelSummary: RecordingAudioLevelSummary?
+    public let deviceID: String?
+    public let deviceName: String?
+
+    public init(
+        requested: Bool,
+        state: RecordingAudioState,
+        sampleRate: Int? = nil,
+        channelCount: Int? = nil,
+        durationSeconds: Double? = nil,
+        sampleBufferCount: Int = 0,
+        lastSampleAt: Date? = nil,
+        lastSourceTimestampSeconds: Double? = nil,
+        currentLevel: RecordingAudioLevel? = nil,
+        levelSummary: RecordingAudioLevelSummary? = nil,
+        deviceID: String? = nil,
+        deviceName: String? = nil
+    ) {
+        self.requested = requested
+        self.state = state
+        self.sampleRate = sampleRate
+        self.channelCount = channelCount
+        self.durationSeconds = durationSeconds
+        self.sampleBufferCount = sampleBufferCount
+        self.lastSampleAt = lastSampleAt
+        self.lastSourceTimestampSeconds = lastSourceTimestampSeconds
+        self.currentLevel = currentLevel
+        self.levelSummary = levelSummary
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+    }
 }
 
 public struct RecordingAudioInfo: Codable, Sendable, Equatable {
@@ -42,6 +177,11 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
     public let audioVideoDurationDifferenceSeconds: Double?
     public let deviceID: String?
     public let deviceName: String?
+    public let controls: RecordingAudioControls
+    public let systemAudioInput: RecordingAudioInputInfo?
+    public let microphoneInput: RecordingAudioInputInfo?
+    public let mixedLevel: RecordingAudioLevel?
+    public let controlEventCount: Int
 
     public init(
         requested: Bool,
@@ -55,7 +195,12 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
         sampleBufferCount: Int = 0,
         audioVideoDurationDifferenceSeconds: Double? = nil,
         deviceID: String? = nil,
-        deviceName: String? = nil
+        deviceName: String? = nil,
+        controls: RecordingAudioControls = RecordingAudioControls(),
+        systemAudioInput: RecordingAudioInputInfo? = nil,
+        microphoneInput: RecordingAudioInputInfo? = nil,
+        mixedLevel: RecordingAudioLevel? = nil,
+        controlEventCount: Int = 0
     ) {
         self.requested = requested
         self.source = source ?? (requested ? .systemAudio : .none)
@@ -69,6 +214,11 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
         self.audioVideoDurationDifferenceSeconds = audioVideoDurationDifferenceSeconds
         self.deviceID = deviceID
         self.deviceName = deviceName
+        self.controls = controls
+        self.systemAudioInput = systemAudioInput
+        self.microphoneInput = microphoneInput
+        self.mixedLevel = mixedLevel
+        self.controlEventCount = controlEventCount
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -84,6 +234,11 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
         case audioVideoDurationDifferenceSeconds
         case deviceID
         case deviceName
+        case controls
+        case systemAudioInput
+        case microphoneInput
+        case mixedLevel
+        case controlEventCount
     }
 
     public init(from decoder: Decoder) throws {
@@ -106,6 +261,19 @@ public struct RecordingAudioInfo: Codable, Sendable, Equatable {
             )
         deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
         deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
+        controls =
+            try container.decodeIfPresent(RecordingAudioControls.self, forKey: .controls)
+            ?? RecordingAudioControls()
+        systemAudioInput = try container.decodeIfPresent(
+            RecordingAudioInputInfo.self,
+            forKey: .systemAudioInput
+        )
+        microphoneInput = try container.decodeIfPresent(
+            RecordingAudioInputInfo.self,
+            forKey: .microphoneInput
+        )
+        mixedLevel = try container.decodeIfPresent(RecordingAudioLevel.self, forKey: .mixedLevel)
+        controlEventCount = try container.decodeIfPresent(Int.self, forKey: .controlEventCount) ?? 0
     }
 
     public static let disabled = RecordingAudioInfo(
@@ -168,19 +336,25 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
     public let includeSystemAudio: Bool
     public let includeMicrophone: Bool
     public let microphoneDeviceID: String?
+    public let systemAudioGain: Double
+    public let microphoneGain: Double
+    public let systemAudioMuted: Bool
+    public let microphoneMuted: Bool
     public let excludeMupawUI: Bool
     public let fileName: String?
 
     public var hasConflictingAudioSelection: Bool {
-        if includeSystemAudio && includeMicrophone { return true }
-        switch audioSource {
-        case .none:
-            return includeSystemAudio || includeMicrophone
-        case .systemAudio:
-            return includeMicrophone
-        case .microphone:
-            return includeSystemAudio
-        }
+        (includeSystemAudio && !audioSource.usesSystemAudio)
+            || (includeMicrophone && !audioSource.usesMicrophone)
+    }
+
+    public var audioControls: RecordingAudioControls {
+        RecordingAudioControls(
+            systemAudioGain: systemAudioGain,
+            microphoneGain: microphoneGain,
+            systemAudioMuted: systemAudioMuted,
+            microphoneMuted: microphoneMuted
+        )
     }
 
     public init(
@@ -195,12 +369,18 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         includeSystemAudio: Bool = false,
         includeMicrophone: Bool = false,
         microphoneDeviceID: String? = nil,
+        systemAudioGain: Double = 1,
+        microphoneGain: Double = 1,
+        systemAudioMuted: Bool = false,
+        microphoneMuted: Bool = false,
         excludeMupawUI: Bool = true,
         fileName: String? = nil
     ) {
         let resolvedAudioSource: RecordingAudioSource
         if let audioSource {
             resolvedAudioSource = audioSource
+        } else if includeSystemAudio && includeMicrophone {
+            resolvedAudioSource = .systemAudioAndMicrophone
         } else if includeSystemAudio && !includeMicrophone {
             resolvedAudioSource = .systemAudio
         } else if includeMicrophone && !includeSystemAudio {
@@ -217,9 +397,13 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         self.quality = quality
         self.includeCursor = includeCursor
         self.audioSource = resolvedAudioSource
-        self.includeSystemAudio = includeSystemAudio || resolvedAudioSource == .systemAudio
-        self.includeMicrophone = includeMicrophone || resolvedAudioSource == .microphone
+        self.includeSystemAudio = includeSystemAudio || resolvedAudioSource.usesSystemAudio
+        self.includeMicrophone = includeMicrophone || resolvedAudioSource.usesMicrophone
         self.microphoneDeviceID = microphoneDeviceID
+        self.systemAudioGain = systemAudioGain
+        self.microphoneGain = microphoneGain
+        self.systemAudioMuted = systemAudioMuted
+        self.microphoneMuted = microphoneMuted
         self.excludeMupawUI = excludeMupawUI
         self.fileName = fileName
     }
@@ -236,6 +420,10 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         case includeSystemAudio
         case includeMicrophone
         case microphoneDeviceID
+        case systemAudioGain
+        case microphoneGain
+        case systemAudioMuted
+        case microphoneMuted
         case excludeMupawUI
         case fileName
     }
@@ -259,6 +447,8 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
             try container.decodeIfPresent(Bool.self, forKey: .includeMicrophone) ?? false
         if let explicitAudioSource {
             audioSource = explicitAudioSource
+        } else if legacySystemAudio && legacyMicrophone {
+            audioSource = .systemAudioAndMicrophone
         } else if legacySystemAudio && !legacyMicrophone {
             audioSource = .systemAudio
         } else if legacyMicrophone && !legacySystemAudio {
@@ -266,9 +456,16 @@ public struct RecordingRequest: Codable, Sendable, Equatable {
         } else {
             audioSource = .none
         }
-        includeSystemAudio = legacySystemAudio || audioSource == .systemAudio
-        includeMicrophone = legacyMicrophone || audioSource == .microphone
+        includeSystemAudio = legacySystemAudio || audioSource.usesSystemAudio
+        includeMicrophone = legacyMicrophone || audioSource.usesMicrophone
         microphoneDeviceID = try container.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
+        systemAudioGain =
+            try container.decodeIfPresent(Double.self, forKey: .systemAudioGain) ?? 1
+        microphoneGain = try container.decodeIfPresent(Double.self, forKey: .microphoneGain) ?? 1
+        systemAudioMuted =
+            try container.decodeIfPresent(Bool.self, forKey: .systemAudioMuted) ?? false
+        microphoneMuted =
+            try container.decodeIfPresent(Bool.self, forKey: .microphoneMuted) ?? false
         excludeMupawUI = try container.decodeIfPresent(Bool.self, forKey: .excludeMupawUI) ?? true
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
     }
@@ -320,6 +517,35 @@ public struct RecordingSessionRequest: Codable, Sendable, Equatable {
 
     public init(sessionID: String) {
         self.sessionID = sessionID
+    }
+}
+
+public struct RecordingAudioControlUpdateRequest: Codable, Sendable, Equatable {
+    public let sessionID: String
+    public let systemAudioGain: Double?
+    public let microphoneGain: Double?
+    public let systemAudioMuted: Bool?
+    public let microphoneMuted: Bool?
+
+    public init(
+        sessionID: String,
+        systemAudioGain: Double? = nil,
+        microphoneGain: Double? = nil,
+        systemAudioMuted: Bool? = nil,
+        microphoneMuted: Bool? = nil
+    ) {
+        self.sessionID = sessionID
+        self.systemAudioGain = systemAudioGain
+        self.microphoneGain = microphoneGain
+        self.systemAudioMuted = systemAudioMuted
+        self.microphoneMuted = microphoneMuted
+    }
+
+    public var hasChanges: Bool {
+        systemAudioGain != nil
+            || microphoneGain != nil
+            || systemAudioMuted != nil
+            || microphoneMuted != nil
     }
 }
 

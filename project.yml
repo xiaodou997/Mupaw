@@ -140,6 +140,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.editing-tests
         GENERATE_INFOPLIST_FILE: YES
 
+  MupawCaptureTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/MupawCaptureTests
+    dependencies:
+      - target: MupawCore
+      - target: MupawCapture
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xiaodou.mupaw.capture-tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Mupaw:
     build:
@@ -148,11 +161,13 @@ schemes:
         MupawMCP: all
         MupawOCRHelper: all
         MupawCoreTests: [test]
+        MupawCaptureTests: [test]
         MupawEditingTests: [test]
     test:
       gatherCoverageData: false
       targets:
         - MupawCoreTests
+        - MupawCaptureTests
         - MupawEditingTests
 
   MupawMCP:

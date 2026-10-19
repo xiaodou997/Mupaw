@@ -30,8 +30,28 @@ struct RecordingSidebarGroup: View {
                 .pickerStyle(.segmented)
                 .disabled(model.hasActiveRecording)
 
-                if model.recordingAudioSource == .microphone {
+                if model.recordingAudioSource.usesMicrophone {
                     microphoneControls
+                }
+
+                if model.recordingAudioSource.usesSystemAudio {
+                    audioLaneControls(
+                        title: L10n.string("recording.audio.system_audio"),
+                        systemImage: "speaker.wave.2.fill",
+                        gain: systemAudioGainBinding,
+                        muted: systemAudioMutedBinding,
+                        input: model.currentRecordingStatus?.audio.systemAudioInput
+                    )
+                }
+
+                if model.recordingAudioSource.usesMicrophone {
+                    audioLaneControls(
+                        title: L10n.string("recording.audio.microphone"),
+                        systemImage: "mic.fill",
+                        gain: microphoneGainBinding,
+                        muted: microphoneMutedBinding,
+                        input: model.currentRecordingStatus?.audio.microphoneInput
+                    )
                 }
 
                 HStack {
@@ -97,10 +117,82 @@ struct RecordingSidebarGroup: View {
                 || model.hasActiveRecording
                 || model.permissions.screenCapture != .authorized
                 || (model.selectedCaptureMode != .region && model.selectedSourceID == nil)
-                || (model.recordingAudioSource == .microphone
+                || (model.recordingAudioSource.usesMicrophone
                     && (model.permissions.microphone != .authorized
                         || model.selectedMicrophoneDeviceID == nil))
         )
+    }
+
+    private var systemAudioGainBinding: Binding<Double> {
+        Binding(
+            get: { model.recordingSystemAudioGain },
+            set: {
+                model.recordingSystemAudioGain = $0
+                model.scheduleRecordingAudioControlUpdate()
+            }
+        )
+    }
+
+    private var microphoneGainBinding: Binding<Double> {
+        Binding(
+            get: { model.recordingMicrophoneGain },
+            set: {
+                model.recordingMicrophoneGain = $0
+                model.scheduleRecordingAudioControlUpdate()
+            }
+        )
+    }
+
+    private var systemAudioMutedBinding: Binding<Bool> {
+        Binding(
+            get: { model.recordingSystemAudioMuted },
+            set: {
+                model.recordingSystemAudioMuted = $0
+                model.scheduleRecordingAudioControlUpdate()
+            }
+        )
+    }
+
+    private var microphoneMutedBinding: Binding<Bool> {
+        Binding(
+            get: { model.recordingMicrophoneMuted },
+            set: {
+                model.recordingMicrophoneMuted = $0
+                model.scheduleRecordingAudioControlUpdate()
+            }
+        )
+    }
+
+    private func audioLaneControls(
+        title: String,
+        systemImage: String,
+        gain: Binding<Double>,
+        muted: Binding<Bool>,
+        input: RecordingAudioInputInfo?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label(title, systemImage: systemImage)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Toggle(L10n.string("recording.audio.mute"), isOn: muted)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+            }
+            HStack(spacing: 8) {
+                Slider(
+                    value: gain,
+                    in: MupawConstants.minimumRecordingAudioGain...MupawConstants.maximumRecordingAudioGain,
+                    step: 0.05
+                )
+                Text(String(format: "%.2f×", gain.wrappedValue))
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(width: 42, alignment: .trailing)
+            }
+            RecordingAudioLevelMeter(level: input?.currentLevel)
+        }
+        .padding(9)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -213,6 +305,8 @@ struct RecordingSidebarGroup: View {
             return "speaker.wave.2.fill"
         case .microphone:
             return "mic.fill"
+        case .systemAudioAndMicrophone:
+            return "waveform.and.mic"
         }
     }
 
@@ -234,6 +328,60 @@ struct RecordingSidebarGroup: View {
                     .foregroundStyle(.green)
             }
         }
+    }
+}
+
+private struct RecordingAudioLevelMeter: View {
+    let level: RecordingAudioLevel?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.secondary.opacity(0.16))
+                    Capsule()
+                        .fill(level?.isStale == true ? Color.secondary : Color.green)
+                        .frame(width: proxy.size.width * CGFloat(displayPeak))
+                        .animation(.linear(duration: 0.14), value: displayPeak)
+                    Capsule()
+                        .fill(.primary.opacity(0.45))
+                        .frame(width: proxy.size.width * CGFloat(displayRMS))
+                        .frame(height: 3)
+                        .animation(.linear(duration: 0.14), value: displayRMS)
+                }
+            }
+            .frame(height: 7)
+
+            HStack {
+                Text(
+                    L10n.format(
+                        "recording.audio.level.rms.format",
+                        level?.rms ?? 0
+                    )
+                )
+                Spacer()
+                Text(
+                    level?.isStale == true
+                        ? L10n.string("recording.audio.level.stale")
+                        : L10n.format(
+                            "recording.audio.level.peak.format",
+                            level?.peak ?? 0
+                        )
+                )
+            }
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var displayRMS: Double {
+        max(0, min(1, level?.isStale == false ? level?.rms ?? 0 : 0))
+    }
+
+    private var displayPeak: Double {
+        max(0, min(1, level?.isStale == false ? level?.peak ?? 0 : 0))
     }
 }
 
@@ -289,6 +437,30 @@ struct RecordingDetailView: View {
             }
             .font(.callout)
             .foregroundStyle(.secondary)
+
+            if status.audio.source.isEnabled {
+                HStack(spacing: 16) {
+                    if status.audio.source.usesSystemAudio {
+                        activeLaneMeter(
+                            L10n.string("recording.audio.system_audio"),
+                            level: status.audio.systemAudioInput?.currentLevel
+                        )
+                    }
+                    if status.audio.source.usesMicrophone {
+                        activeLaneMeter(
+                            L10n.string("recording.audio.microphone"),
+                            level: status.audio.microphoneInput?.currentLevel
+                        )
+                    }
+                    if status.audio.source.isMixed {
+                        activeLaneMeter(
+                            L10n.string("recording.audio.mixed_output"),
+                            level: status.audio.mixedLevel
+                        )
+                    }
+                }
+                .frame(maxWidth: 620)
+            }
             HStack(spacing: 12) {
                 Button(role: .destructive) {
                     Task { await model.cancelCurrentRecording() }
@@ -376,6 +548,30 @@ struct RecordingDetailView: View {
                             RecordingTimeFormatter.preciseString(difference)
                         )
                     }
+                    metadataRow(
+                        L10n.string("recording.metadata.system_audio_gain"),
+                        String(format: "%.2f×", artifact.audio.controls.systemAudioGain)
+                    )
+                    metadataRow(
+                        L10n.string("recording.metadata.microphone_gain"),
+                        String(format: "%.2f×", artifact.audio.controls.microphoneGain)
+                    )
+                    metadataRow(
+                        L10n.string("recording.metadata.mute_state"),
+                        L10n.format(
+                            "recording.metadata.mute_state.format",
+                            artifact.audio.controls.systemAudioMuted
+                                ? L10n.string("recording.audio.muted")
+                                : L10n.string("recording.audio.unmuted"),
+                            artifact.audio.controls.microphoneMuted
+                                ? L10n.string("recording.audio.muted")
+                                : L10n.string("recording.audio.unmuted")
+                        )
+                    )
+                    metadataRow(
+                        L10n.string("recording.metadata.control_events"),
+                        String(artifact.audio.controlEventCount)
+                    )
                 }
                 metadataRow(
                     L10n.string("metadata.bytes"),
@@ -409,7 +605,20 @@ struct RecordingDetailView: View {
             return "speaker.wave.2.fill"
         case .microphone:
             return "mic.fill"
+        case .systemAudioAndMicrophone:
+            return "waveform.and.mic"
         }
+    }
+
+    private func activeLaneMeter(_ title: String, level: RecordingAudioLevel?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+            RecordingAudioLevelMeter(level: level)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(10)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func metadataRow(_ label: String, _ value: String) -> some View {

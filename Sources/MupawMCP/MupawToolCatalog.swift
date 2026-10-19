@@ -107,7 +107,7 @@ internal enum MupawToolCatalog {
         Tool(
             name: "mupaw_recording_start",
             description:
-                "Start one application-owned H.264 MP4 recording with no audio, system audio, or one microphone and return a stable session ID after ScreenCaptureKit starts. Supports full_screen, window, or a structured single-display region. System-audio/microphone mixing, camera, click, keystroke, GIF, and zoom features are not included in M2b.",
+                "Start one application-owned H.264 MP4 recording with no audio, system audio, one microphone, or a true system-audio-plus-microphone mix. Independent gains and mute states are applied to the final single AAC track. Camera, click, keystroke, GIF, and zoom features are not included in M2c.",
             inputSchema: recordingStartSchema
         ),
         Tool(
@@ -117,9 +117,15 @@ internal enum MupawToolCatalog {
             inputSchema: recordingSessionSchema
         ),
         Tool(
+            name: "mupaw_recording_update_audio_controls",
+            description:
+                "Update the active recording's system-audio and microphone gains or mute states without changing its selected audio sources or microphone device. Returns the refreshed recording status and live per-source levels.",
+            inputSchema: recordingAudioControlUpdateSchema
+        ),
+        Tool(
             name: "mupaw_recording_stop",
             description:
-                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, H.264 video validation, and requested AAC system-audio or microphone validation are complete.",
+                "Stop and finalize an active recording session. Success is returned only after the owner-only MP4, metadata, SHA-256, preview, H.264 video validation, and one final 48 kHz AAC track containing the requested controlled source or mix are complete.",
             inputSchema: recordingSessionSchema
         ),
         Tool(
@@ -367,24 +373,25 @@ internal enum MupawToolCatalog {
                     .string("none"),
                     .string("system_audio"),
                     .string("microphone"),
+                    .string("system_audio_and_microphone"),
                 ]),
                 "default": .string("none"),
                 "description": .string(
-                    "Select no audio, system audio, or one microphone. M2b rejects system-audio/microphone mixing."
+                    "Select no audio, system audio, one microphone, or a true system-audio-plus-microphone mix encoded as one final AAC track."
                 ),
             ]),
             "include_system_audio": .object([
                 "type": .string("boolean"),
                 "default": .bool(false),
                 "description": .string(
-                    "Legacy compatibility flag for audio_source=system_audio. Do not combine it with microphone selection."
+                    "Legacy compatibility flag. When both legacy audio flags are true, Mupaw selects system_audio_and_microphone."
                 ),
             ]),
             "include_microphone": .object([
                 "type": .string("boolean"),
                 "default": .bool(false),
                 "description": .string(
-                    "Legacy compatibility flag for audio_source=microphone. Do not combine it with system audio."
+                    "Legacy compatibility flag. When both legacy audio flags are true, Mupaw selects system_audio_and_microphone."
                 ),
             ]),
             "microphone_device_id": .object([
@@ -392,6 +399,16 @@ internal enum MupawToolCatalog {
                 "description": .string(
                     "Optional exact microphone ID from mupaw_microphones_list. Omit to use the current system default. Valid only for microphone audio."
                 ),
+            ]),
+            "system_audio_gain": audioGainProperty,
+            "microphone_gain": audioGainProperty,
+            "system_audio_muted": .object([
+                "type": .string("boolean"),
+                "default": .bool(false),
+            ]),
+            "microphone_muted": .object([
+                "type": .string("boolean"),
+                "default": .bool(false),
             ]),
             "exclude_mupaw_ui": .object([
                 "type": .string("boolean"),
@@ -418,6 +435,30 @@ internal enum MupawToolCatalog {
         ]),
         "required": .array([.string("session_id")]),
         "additionalProperties": .bool(false),
+    ])
+
+    private static let recordingAudioControlUpdateSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "session_id": .object([
+                "type": .string("string"),
+                "description": .string("Active recording session UUID."),
+            ]),
+            "system_audio_gain": audioGainProperty,
+            "microphone_gain": audioGainProperty,
+            "system_audio_muted": .object(["type": .string("boolean")]),
+            "microphone_muted": .object(["type": .string("boolean")]),
+        ]),
+        "required": .array([.string("session_id")]),
+        "additionalProperties": .bool(false),
+    ])
+
+    private static let audioGainProperty: Value = .object([
+        "type": .string("number"),
+        "minimum": .int(0),
+        "maximum": .int(2),
+        "default": .int(1),
+        "description": .string("Linear gain from 0.0 through 2.0."),
     ])
 
     private static let projectIDProperty: Value = .object([

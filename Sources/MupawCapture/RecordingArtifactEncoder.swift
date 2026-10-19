@@ -117,9 +117,9 @@ enum RecordingArtifactEncoder {
             switch request.audioSource {
             case .none:
                 throw RecordingArtifactEncoderError.invalidAudioTrack
-            case .systemAudio:
-                guard sampleRate == MupawConstants.recordingSystemAudioSampleRate,
-                    channelCount == MupawConstants.recordingSystemAudioChannelCount
+            case .systemAudio, .systemAudioAndMicrophone:
+                guard sampleRate == MupawConstants.recordingMixedAudioSampleRate,
+                    channelCount == MupawConstants.recordingMixedAudioChannelCount
                 else {
                     throw RecordingArtifactEncoderError.invalidAudioTrack
                 }
@@ -156,7 +156,15 @@ enum RecordingArtifactEncoder {
                 sampleBufferCount: metrics.audioSampleBufferCount,
                 audioVideoDurationDifferenceSeconds: durationDifference,
                 deviceID: microphoneDevice?.id,
-                deviceName: microphoneDevice?.name
+                deviceName: microphoneDevice?.name,
+                controls: metrics.controls,
+                systemAudioInput: request.audioSource.usesSystemAudio
+                    ? inputInfo(metrics.systemAudio, device: nil)
+                    : nil,
+                microphoneInput: request.audioSource.usesMicrophone
+                    ? inputInfo(metrics.microphone, device: microphoneDevice)
+                    : nil,
+                controlEventCount: metrics.controlEvents.count
             )
         } else {
             guard audioTracks.isEmpty, metrics.audioSampleBufferCount == 0 else {
@@ -222,5 +230,38 @@ enum RecordingArtifactEncoder {
             hasher.update(data: data)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func inputInfo(
+        _ metrics: RecordingAudioLaneMetrics,
+        device: MicrophoneDeviceDescriptor?
+    ) -> RecordingAudioInputInfo {
+        let summary: RecordingAudioLevelSummary?
+        if let averageRMS = metrics.averageRMS,
+            let maximumPeak = metrics.maximumPeak,
+            metrics.measurementCount > 0
+        {
+            summary = RecordingAudioLevelSummary(
+                averageRMS: averageRMS,
+                maximumPeak: maximumPeak,
+                measurementCount: metrics.measurementCount
+            )
+        } else {
+            summary = nil
+        }
+        return RecordingAudioInputInfo(
+            requested: metrics.requested,
+            state: .completed,
+            sampleRate: metrics.sampleRate,
+            channelCount: metrics.channelCount,
+            durationSeconds: metrics.durationSeconds,
+            sampleBufferCount: metrics.sampleBufferCount,
+            lastSampleAt: metrics.lastSampleAt,
+            lastSourceTimestampSeconds: metrics.lastSourceTimestampSeconds,
+            currentLevel: nil,
+            levelSummary: summary,
+            deviceID: device?.id,
+            deviceName: device?.name
+        )
     }
 }

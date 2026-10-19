@@ -53,6 +53,10 @@ final class AppModel {
     var recordingFrameRate = 30
     var recordingQuality: RecordingVideoQuality = .standard
     var recordingAudioSource: RecordingAudioSource = .none
+    var recordingSystemAudioGain = 1.0
+    var recordingMicrophoneGain = 1.0
+    var recordingSystemAudioMuted = false
+    var recordingMicrophoneMuted = false
     private(set) var microphoneDevices: [MicrophoneDeviceDescriptor] = []
     var selectedMicrophoneDeviceID: String?
     private(set) var currentRecordingStatus: RecordingSessionStatus?
@@ -110,6 +114,7 @@ final class AppModel {
     private var lastExternalApplicationProcessID: Int32?
     private var hasStarted = false
     private var recordingStatusTask: Task<Void, Never>?
+    private var recordingAudioControlTask: Task<Void, Never>?
 
     init() {
         do {
@@ -183,6 +188,8 @@ final class AppModel {
     func shutdown() {
         recordingStatusTask?.cancel()
         recordingStatusTask = nil
+        recordingAudioControlTask?.cancel()
+        recordingAudioControlTask = nil
         recordingService.cancelActiveRecordingForShutdown()
         regionSelectionController.cancel()
         hotKeyManager?.stop()
@@ -226,7 +233,7 @@ final class AppModel {
             result.defaultDeviceID
             ?? microphoneDevices.first(where: { $0.isDefault })?.id
             ?? microphoneDevices.first?.id
-        if showErrors, recordingAudioSource == .microphone, microphoneDevices.isEmpty {
+        if showErrors, recordingAudioSource.usesMicrophone, microphoneDevices.isEmpty {
             errorMessage = L10n.string("recording.error.no_microphone_devices")
         }
     }
@@ -494,7 +501,7 @@ final class AppModel {
             errorMessage = AppCaptureError.permissionRequired.localizedDescription
             return
         }
-        if recordingAudioSource == .microphone {
+        if recordingAudioSource.usesMicrophone {
             guard permissions.microphone == .authorized else {
                 errorMessage = L10n.string("recording.error.microphone_permission_required")
                 return
@@ -543,9 +550,13 @@ final class AppModel {
                     quality: recordingQuality,
                     includeCursor: includeCursor,
                     audioSource: recordingAudioSource,
-                    microphoneDeviceID: recordingAudioSource == .microphone
+                    microphoneDeviceID: recordingAudioSource.usesMicrophone
                         ? selectedMicrophoneDeviceID
                         : nil,
+                    systemAudioGain: recordingSystemAudioGain,
+                    microphoneGain: recordingMicrophoneGain,
+                    systemAudioMuted: recordingSystemAudioMuted,
+                    microphoneMuted: recordingMicrophoneMuted,
                     excludeMupawUI: selectedCaptureMode != .window
                 )
             )
@@ -595,6 +606,41 @@ final class AppModel {
         do {
             let status = try await recordingService.cancelRecording(
                 RecordingSessionRequest(sessionID: sessionID)
+            )
+            applyRecordingStatus(status)
+        } catch {
+            errorMessage = localizedMessage(for: error)
+        }
+    }
+
+    func scheduleRecordingAudioControlUpdate() {
+        guard hasActiveRecording else { return }
+        recordingAudioControlTask?.cancel()
+        recordingAudioControlTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(80))
+            } catch {
+                return
+            }
+            await self?.updateRecordingAudioControls()
+        }
+    }
+
+    func updateRecordingAudioControls() async {
+        guard let sessionID = currentRecordingStatus?.id ?? recordingService.activeSessionID,
+            hasActiveRecording
+        else {
+            return
+        }
+        do {
+            let status = try recordingService.updateAudioControls(
+                RecordingAudioControlUpdateRequest(
+                    sessionID: sessionID,
+                    systemAudioGain: recordingSystemAudioGain,
+                    microphoneGain: recordingMicrophoneGain,
+                    systemAudioMuted: recordingSystemAudioMuted,
+                    microphoneMuted: recordingMicrophoneMuted
+                )
             )
             applyRecordingStatus(status)
         } catch {
@@ -739,6 +785,10 @@ final class AppModel {
 
     private func applyRecordingStatus(_ status: RecordingSessionStatus) {
         currentRecordingStatus = status
+        recordingSystemAudioGain = status.audio.controls.systemAudioGain
+        recordingMicrophoneGain = status.audio.controls.microphoneGain
+        recordingSystemAudioMuted = status.audio.controls.systemAudioMuted
+        recordingMicrophoneMuted = status.audio.controls.microphoneMuted
         if let artifact = status.artifact {
             lastRecordingArtifact = artifact
         }
@@ -747,6 +797,8 @@ final class AppModel {
         } else {
             recordingStatusTask?.cancel()
             recordingStatusTask = nil
+            recordingAudioControlTask?.cancel()
+            recordingAudioControlTask = nil
         }
     }
 
@@ -1085,6 +1137,12 @@ final class AppModel {
                 code: .audioMixingNotSupported,
                 message: error.localizedDescription
             )
+        case .invalidAudioControls:
+            return .failure(
+                id: requestID,
+                code: .invalidAudioControls,
+                message: error.localizedDescription
+            )
         case .microphonePermissionRequired:
             return .failure(
                 id: requestID,
@@ -1230,6 +1288,14 @@ final class AppModel {
             case .recordingStatus:
                 let sessionRequest = try request.parameters.decode(RecordingSessionRequest.self)
                 let status = try recordingService.recordingStatus(sessionRequest)
+                applyRecordingStatus(status)
+                return try .success(id: request.id, value: status)
+
+            case .recordingUpdateAudioControls:
+                let updateRequest = try request.parameters.decode(
+                    RecordingAudioControlUpdateRequest.self
+                )
+                let status = try recordingService.updateAudioControls(updateRequest)
                 applyRecordingStatus(status)
                 return try .success(id: request.id, value: status)
 

@@ -50,6 +50,11 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertFalse(request.includeSystemAudio)
         XCTAssertFalse(request.includeMicrophone)
         XCTAssertEqual(request.audioSource, .none)
+        XCTAssertEqual(request.systemAudioGain, 1)
+        XCTAssertEqual(request.microphoneGain, 1)
+        XCTAssertFalse(request.systemAudioMuted)
+        XCTAssertFalse(request.microphoneMuted)
+        XCTAssertTrue(request.audioControls.isValid)
         XCTAssertTrue(request.excludeMupawUI)
     }
 
@@ -66,7 +71,29 @@ final class RecordingModelTests: XCTestCase {
             sampleBufferCount: 200,
             audioVideoDurationDifferenceSeconds: 0.04,
             deviceID: "mic-1",
-            deviceName: "Test Microphone"
+            deviceName: "Test Microphone",
+            controls: RecordingAudioControls(
+                systemAudioGain: 0.5,
+                microphoneGain: 1.5,
+                systemAudioMuted: true,
+                microphoneMuted: false
+            ),
+            microphoneInput: RecordingAudioInputInfo(
+                requested: true,
+                state: .completed,
+                sampleRate: 48_000,
+                channelCount: 1,
+                durationSeconds: 4.2,
+                sampleBufferCount: 200,
+                levelSummary: RecordingAudioLevelSummary(
+                    averageRMS: 0.12,
+                    maximumPeak: 0.8,
+                    measurementCount: 200
+                ),
+                deviceID: "mic-1",
+                deviceName: "Test Microphone"
+            ),
+            controlEventCount: 3
         )
 
         let data = try JSONEncoder.mupaw.encode(value)
@@ -78,6 +105,9 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(decoded.source, .microphone)
         XCTAssertEqual(decoded.deviceID, "mic-1")
         XCTAssertEqual(decoded.deviceName, "Test Microphone")
+        XCTAssertEqual(decoded.controls.microphoneGain, 1.5)
+        XCTAssertEqual(decoded.microphoneInput?.sampleBufferCount, 200)
+        XCTAssertEqual(decoded.controlEventCount, 3)
         XCTAssertEqual(RecordingAudioInfo.disabled.source, .none)
     }
 
@@ -86,7 +116,9 @@ final class RecordingModelTests: XCTestCase {
             mode: .window,
             sourceID: "window:42",
             audioSource: .microphone,
-            microphoneDeviceID: "mic-1"
+            microphoneDeviceID: "mic-1",
+            microphoneGain: 1.25,
+            microphoneMuted: true
         )
         let roundTrip = try JSONDecoder.mupaw.decode(
             RecordingRequest.self,
@@ -96,6 +128,8 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertTrue(roundTrip.includeMicrophone)
         XCTAssertFalse(roundTrip.includeSystemAudio)
         XCTAssertEqual(roundTrip.microphoneDeviceID, "mic-1")
+        XCTAssertEqual(roundTrip.microphoneGain, 1.25)
+        XCTAssertTrue(roundTrip.microphoneMuted)
         XCTAssertFalse(roundTrip.hasConflictingAudioSelection)
 
         let legacyData = Data(
@@ -114,7 +148,7 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertEqual(legacy.microphoneDeviceID, "legacy-mic")
     }
 
-    func testConflictingAudioSelectionsAreDetected() throws {
+    func testMixedLegacyAudioAndConflictingSelections() throws {
         let bothLegacy = try JSONDecoder.mupaw.decode(
             RecordingRequest.self,
             from: Data(
@@ -128,7 +162,10 @@ final class RecordingModelTests: XCTestCase {
                 """.utf8
             )
         )
-        XCTAssertTrue(bothLegacy.hasConflictingAudioSelection)
+        XCTAssertEqual(bothLegacy.audioSource, .systemAudioAndMicrophone)
+        XCTAssertTrue(bothLegacy.includeSystemAudio)
+        XCTAssertTrue(bothLegacy.includeMicrophone)
+        XCTAssertFalse(bothLegacy.hasConflictingAudioSelection)
 
         let contradictory = RecordingRequest(
             mode: .window,
@@ -137,6 +174,62 @@ final class RecordingModelTests: XCTestCase {
             includeMicrophone: true
         )
         XCTAssertTrue(contradictory.hasConflictingAudioSelection)
+    }
+
+    func testAudioControlsValidateAndApplyPartialUpdates() {
+        let controls = RecordingAudioControls(
+            systemAudioGain: 0.75,
+            microphoneGain: 1.25,
+            systemAudioMuted: false,
+            microphoneMuted: true
+        )
+        XCTAssertTrue(controls.isValid)
+        XCTAssertFalse(
+            RecordingAudioControls(systemAudioGain: -0.01, microphoneGain: 1).isValid
+        )
+        XCTAssertFalse(
+            RecordingAudioControls(systemAudioGain: 1, microphoneGain: 2.01).isValid
+        )
+        XCTAssertFalse(
+            RecordingAudioControls(systemAudioGain: .infinity, microphoneGain: 1).isValid
+        )
+
+        let update = RecordingAudioControlUpdateRequest(
+            sessionID: "session",
+            systemAudioGain: 1.5,
+            microphoneMuted: false
+        )
+        XCTAssertTrue(update.hasChanges)
+        let applied = controls.applying(update)
+        XCTAssertEqual(applied.systemAudioGain, 1.5)
+        XCTAssertEqual(applied.microphoneGain, 1.25)
+        XCTAssertFalse(applied.microphoneMuted)
+        XCTAssertFalse(RecordingAudioControlUpdateRequest(sessionID: "session").hasChanges)
+    }
+
+    func testCanonicalMixedRequestRoundTrip() throws {
+        let request = RecordingRequest(
+            mode: .window,
+            sourceID: "window:42",
+            audioSource: .systemAudioAndMicrophone,
+            microphoneDeviceID: "mic-1",
+            systemAudioGain: 0.6,
+            microphoneGain: 1.4,
+            systemAudioMuted: false,
+            microphoneMuted: true
+        )
+        let decoded = try JSONDecoder.mupaw.decode(
+            RecordingRequest.self,
+            from: JSONEncoder.mupaw.encode(request)
+        )
+        XCTAssertEqual(decoded.audioSource, .systemAudioAndMicrophone)
+        XCTAssertTrue(decoded.audioSource.usesSystemAudio)
+        XCTAssertTrue(decoded.audioSource.usesMicrophone)
+        XCTAssertTrue(decoded.audioSource.isMixed)
+        XCTAssertTrue(decoded.includeSystemAudio)
+        XCTAssertTrue(decoded.includeMicrophone)
+        XCTAssertEqual(decoded.audioControls, request.audioControls)
+        XCTAssertFalse(decoded.hasConflictingAudioSelection)
     }
 
     func testMicrophoneDeviceDescriptorsRoundTrip() throws {

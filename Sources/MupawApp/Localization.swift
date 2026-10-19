@@ -123,6 +123,8 @@ enum L10n {
             return string("recording.audio_source.system_audio")
         case .microphone:
             return string("recording.audio_source.microphone")
+        case .systemAudioAndMicrophone:
+            return string("recording.audio_source.system_audio_and_microphone")
         }
     }
 

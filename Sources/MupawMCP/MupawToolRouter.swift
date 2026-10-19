@@ -48,6 +48,9 @@ internal struct MupawToolRouter: Sendable {
             case "mupaw_recording_status":
                 return try await recordingStatus(arguments: arguments)
 
+            case "mupaw_recording_update_audio_controls":
+                return try await recordingUpdateAudioControls(arguments: arguments)
+
             case "mupaw_recording_stop":
                 return try await recordingStop(arguments: arguments)
 
@@ -234,7 +237,9 @@ internal struct MupawToolRouter: Sendable {
         let explicitAudioSource: RecordingAudioSource?
         if let value = arguments["audio_source"]?.stringValue {
             guard let parsed = RecordingAudioSource(rawValue: value) else {
-                return failure("audio_source must be none, system_audio, or microphone.")
+                return failure(
+                    "audio_source must be none, system_audio, microphone, or system_audio_and_microphone."
+                )
             }
             explicitAudioSource = parsed
         } else {
@@ -242,24 +247,21 @@ internal struct MupawToolRouter: Sendable {
         }
         let includeSystemAudio = arguments["include_system_audio"]?.boolValue ?? false
         let includeMicrophone = arguments["include_microphone"]?.boolValue ?? false
-        if includeSystemAudio && includeMicrophone {
-            return failure(
-                "Mupaw request failed [audio_mixing_not_supported]: M2b does not mix system audio and microphone input."
-            )
-        }
         let audioSource: RecordingAudioSource
         if let explicitAudioSource {
             audioSource = explicitAudioSource
-            if includeSystemAudio, explicitAudioSource != .systemAudio {
+            if includeSystemAudio, !explicitAudioSource.usesSystemAudio {
                 return failure(
                     "Mupaw request failed [audio_mixing_not_supported]: audio_source conflicts with include_system_audio."
                 )
             }
-            if includeMicrophone, explicitAudioSource != .microphone {
+            if includeMicrophone, !explicitAudioSource.usesMicrophone {
                 return failure(
                     "Mupaw request failed [audio_mixing_not_supported]: audio_source conflicts with include_microphone."
                 )
             }
+        } else if includeSystemAudio && includeMicrophone {
+            audioSource = .systemAudioAndMicrophone
         } else if includeSystemAudio {
             audioSource = .systemAudio
         } else if includeMicrophone {
@@ -269,9 +271,16 @@ internal struct MupawToolRouter: Sendable {
         }
         let microphoneDeviceID = arguments["microphone_device_id"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if audioSource != .microphone, let microphoneDeviceID, !microphoneDeviceID.isEmpty {
-            return failure("microphone_device_id is valid only when audio_source is microphone.")
+        if !audioSource.usesMicrophone, let microphoneDeviceID, !microphoneDeviceID.isEmpty {
+            return failure(
+                "microphone_device_id is valid only when audio_source uses microphone input."
+            )
         }
+
+        let systemAudioGain = try audioGain(arguments["system_audio_gain"], defaultValue: 1)
+        let microphoneGain = try audioGain(arguments["microphone_gain"], defaultValue: 1)
+        let systemAudioMuted = arguments["system_audio_muted"]?.boolValue ?? false
+        let microphoneMuted = arguments["microphone_muted"]?.boolValue ?? false
 
         let request = RecordingRequest(
             mode: mode,
@@ -285,6 +294,10 @@ internal struct MupawToolRouter: Sendable {
             includeSystemAudio: includeSystemAudio,
             includeMicrophone: includeMicrophone,
             microphoneDeviceID: microphoneDeviceID,
+            systemAudioGain: systemAudioGain,
+            microphoneGain: microphoneGain,
+            systemAudioMuted: systemAudioMuted,
+            microphoneMuted: microphoneMuted,
             excludeMupawUI: arguments["exclude_mupaw_ui"]?.boolValue ?? true,
             fileName: arguments["file_name"]?.stringValue
         )
@@ -300,6 +313,41 @@ internal struct MupawToolRouter: Sendable {
         let request = try recordingSessionRequest(arguments)
         let status: RecordingSessionStatus = try await call(
             method: .recordingStatus,
+            payload: request,
+            responseType: RecordingSessionStatus.self
+        )
+        return recordingResult(status)
+    }
+
+    private func recordingUpdateAudioControls(
+        arguments: [String: Value]?
+    ) async throws -> CallTool.Result {
+        let arguments = arguments ?? [:]
+        guard
+            let sessionID = arguments["session_id"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !sessionID.isEmpty
+        else {
+            throw ToolArgumentError(
+                message: "Mupaw request failed [invalid_request]: session_id is required."
+            )
+        }
+
+        let request = RecordingAudioControlUpdateRequest(
+            sessionID: sessionID,
+            systemAudioGain: try optionalAudioGain(arguments["system_audio_gain"]),
+            microphoneGain: try optionalAudioGain(arguments["microphone_gain"]),
+            systemAudioMuted: arguments["system_audio_muted"]?.boolValue,
+            microphoneMuted: arguments["microphone_muted"]?.boolValue
+        )
+        guard request.hasChanges else {
+            throw ToolArgumentError(
+                message:
+                    "Mupaw request failed [invalid_audio_controls]: Provide at least one gain or mute field."
+            )
+        }
+        let status: RecordingSessionStatus = try await call(
+            method: .recordingUpdateAudioControls,
             payload: request,
             responseType: RecordingSessionStatus.self
         )
@@ -478,6 +526,26 @@ internal struct MupawToolRouter: Sendable {
         if let double = value?.doubleValue { return double }
         if let integer = value?.intValue { return Double(integer) }
         return nil
+    }
+
+    private func audioGain(_ value: Value?, defaultValue: Double) throws -> Double {
+        guard let value else { return defaultValue }
+        guard let gain = number(value),
+            gain.isFinite,
+            (MupawConstants.minimumRecordingAudioGain...MupawConstants.maximumRecordingAudioGain)
+                .contains(gain)
+        else {
+            throw ToolArgumentError(
+                message:
+                    "Mupaw request failed [invalid_audio_controls]: audio gain must be a finite number from 0.0 through 2.0."
+            )
+        }
+        return gain
+    }
+
+    private func optionalAudioGain(_ value: Value?) throws -> Double? {
+        guard value != nil else { return nil }
+        return try audioGain(value, defaultValue: 1)
     }
 
     private func call<Payload: Encodable & Sendable, Result: Decodable & Sendable>(

@@ -26,6 +26,15 @@ public enum MupawConstants {
     public static let recordingMicrophoneAudioSampleRate = 48_000
     public static let recordingMicrophoneAudioBitRate = 128_000
     public static let maximumRecordingMicrophoneChannelCount = 2
+    public static let recordingMixedAudioSampleRate = 48_000
+    public static let recordingMixedAudioChannelCount = 2
+    public static let recordingMixedAudioBitRate = 192_000
+    public static let minimumRecordingAudioGain = 0.0
+    public static let maximumRecordingAudioGain = 2.0
+    public static let recordingAudioLevelStaleSeconds = 0.75
+    public static let recordingAudioStartupTimeoutSeconds = 4.0
+    public static let recordingAudioSourceStallSeconds = 3.0
+    public static let maximumRecordingAudioControlEvents = 4_096
     public static let maximumRecordingAudioVideoDurationDifferenceSeconds = 0.25
     public static let maximumPendingRecordingSamplesPerTrack = 240
     public static let screenshotProjectSchemaVersion = 1
